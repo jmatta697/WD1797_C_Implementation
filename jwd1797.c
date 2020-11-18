@@ -51,7 +51,25 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
     input from the drive is sampled. If the ready signal is low (0), the command
     is not executed and an interrupt is generated. ALl type I commands are
     performed regardless of the state of the READY pin from the drive. */
+	printf("Write to wd1797: %X %X\n", port_addr, value);
 
+	switch(port_addr) {
+		case 0xb0 :	// command port
+			jwd_controller->commandRegister = value;
+			// w->statusPortInterrupt=0;
+			doJWD1797Command(jwd_controller);
+			break;
+		case 0xb1 :
+			break;
+		case 0xb2 :
+			break;
+		case 0xb3 :
+			break;
+		case 0xb4 :
+			break;
+		default :
+			printf("%X is an invalid port!\n", port_addr);
+		}
 
 }
 
@@ -59,7 +77,8 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 
 }
 
-// WD1797 accepts 11 different commands
+/* WD1797 accepts 11 different commands - this function will register the
+	command and set all paramenters associated with it */
 void doJWD1797Command(JWD1797* w) {
   /* command words should only be loaded into the command register when the
     BUSY status bit is off (status bit 0). One exception is the force interrupt.
@@ -68,7 +87,71 @@ void doJWD1797Command(JWD1797* w) {
     the BUSY status bit is reset */
 
   // TYPE I Commands - Restore, Seek, Step, Step-In, Step-Out
+	// bit	--	def
+	// 0		--	stepping motor rate0 (r0)
+	// 1		--	stepping motor rate1 (r1)
+	// 2		--	Verify on destination track? (V)
+	// 3		-- 	Head load flag (0 = load head at beginning, 1 = unload head)
+	// 4-7	--	RESTORE = 0000 / SEEK = 0001 (bits 7654)
+	// --- T = Track update flag (0-do not update track register, 1-update)
+	// 4-7	--	STEP = 001T / STEP-IN = 010T / STEP-OUT = 011T (bits 7654)
 
+	/* determine if command in command register is a TYPE I command by checking
+		if the 7 bit is a zero (all TYPE I commands have a zero (0) in the 7 bit) */
+	if((w->commandRegister>>7) & 1 == 0) {
+		printf("TYPE I Command in WD1797 command register..\n");
+		w->currentCommandType = 1;
+		// establish step rate options for 1MHz clock (only used with TYPE I cmds)
+		int rates[] = {6, 12, 20, 30};
+		// set flags according to command
+		int rateBits = w->commandRegister&3;
+		w->stepRate = rates[rateBits];
+		w->verifyFlag = (w->commandRegister>>2) & 1;
+		w->headLoadFlag = (w->commandRegister>>3) & 1;
+
+		// get high bits of command register to determine the specific command
+		int hbits = ((w->commandRegister>>4) & 15);	// examine 4 high bits
+
+		if(hbits < 2) {	// RESTORE or SEEK command
+			if(hbits&1 == 0) {	// RESTORE command
+				// restore command detected
+				w->currentCommandName = "RESTORE";
+				printf("%s command in WD1797 command register\n", w->currentCommandName);
+				// do restore stuff.....
+			}
+			else {	// SEEK command
+				// seek command detected
+				w->currentCommandName = "SEEK";
+				printf("%s command in WD1797 command register\n", w->currentCommandName);
+				// do seek stuff.....
+			}
+		}
+		else {	// STEP, STEP-IN or STEP-OUT command
+			// set track register update flag
+			w->trackUpdateFlag = (w->commandRegister>>4) & 1;
+			// determine which command by examining highest three bits of cmd reg
+			int cmdID = (w->commandRegister>>5) & 3;
+			if(cmdID == 1) {	// STEP
+				// seek command detected
+				w->currentCommandName = "STEP";
+				printf("%s command in WD1797 command register\n", w->currentCommandName);
+				// do seek stuff....
+			}
+			else if(cmdID == 2) {	//STEP-IN
+				// seek command detected
+				w->currentCommandName = "STEP-IN";
+				printf("%s command in WD1797 command register\n", w->currentCommandName);
+				// do seek stuff....
+			}
+			else {	// STEP-OUT
+				// seek command detected
+				w->currentCommandName = "STEP-OUT";
+				printf("%s command in WD1797 command register\n", w->currentCommandName);
+				// do seek stuff....
+			}
+		}
+
+	}
 
 }
 

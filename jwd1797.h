@@ -25,8 +25,19 @@ unsigned char CRCRegister;
 
 // ready input from disk drive interface (0 = not ready, 1 = ready)
 int ready;
-// 
+// step direction output to disk drive interface (0 = out, 1 = in)
 int stepDirection;
+// step pulse output to disk drive interface (MFM - 2 microseconds, FM - 4)
+int stepPulse;
+
+// stepping motor rate - determined by TYPE I command bits 0 and 1
+int stepRate;
+
+char* currentCommandName;
+int currentCommandType;
+int verifyFlag;
+int headLoadFlag;
+int trackUpdateFlag;
 
 
 
