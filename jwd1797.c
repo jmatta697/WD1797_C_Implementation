@@ -7,7 +7,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-# include "jwd1797.h"
+#include "jwd1797.h"
 
 // extern e8259_t* e8259_slave;
 
@@ -54,22 +54,21 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 	printf("Write to wd1797: %X %X\n", port_addr, value);
 
 	switch(port_addr) {
-		case 0xb0 :	// command port
+		case 0xb0:
 			jwd_controller->commandRegister = value;
-			// w->statusPortInterrupt=0;
 			doJWD1797Command(jwd_controller);
 			break;
-		case 0xb1 :
+		case 0xb1:
 			break;
-		case 0xb2 :
+		case 0xb2:
 			break;
-		case 0xb3 :
+		case 0xb3:
 			break;
-		case 0xb4 :
+		case 0xb4:
 			break;
-		default :
+		default:
 			printf("%X is an invalid port!\n", port_addr);
-		}
+	}
 
 }
 
@@ -98,11 +97,13 @@ void doJWD1797Command(JWD1797* w) {
 
 	/* determine if command in command register is a TYPE I command by checking
 		if the 7 bit is a zero (all TYPE I commands have a zero (0) in the 7 bit) */
-	if((w->commandRegister>>7) & 1 == 0) {
+	if(((w->commandRegister>>7) & 1) == 0) {
 		printf("TYPE I Command in WD1797 command register..\n");
 		w->currentCommandType = 1;
+		
 		// establish step rate options for 1MHz clock (only used with TYPE I cmds)
 		int rates[] = {6, 12, 20, 30};
+
 		// set flags according to command
 		int rateBits = w->commandRegister&3;
 		w->stepRate = rates[rateBits];
@@ -113,14 +114,12 @@ void doJWD1797Command(JWD1797* w) {
 		int hbits = ((w->commandRegister>>4) & 15);	// examine 4 high bits
 
 		if(hbits < 2) {	// RESTORE or SEEK command
-			if(hbits&1 == 0) {	// RESTORE command
-				// restore command detected
+			if((hbits&1) == 0) {	// RESTORE command
 				w->currentCommandName = "RESTORE";
 				printf("%s command in WD1797 command register\n", w->currentCommandName);
 				// do restore stuff.....
 			}
 			else {	// SEEK command
-				// seek command detected
 				w->currentCommandName = "SEEK";
 				printf("%s command in WD1797 command register\n", w->currentCommandName);
 				// do seek stuff.....
@@ -132,22 +131,19 @@ void doJWD1797Command(JWD1797* w) {
 			// determine which command by examining highest three bits of cmd reg
 			int cmdID = (w->commandRegister>>5) & 3;
 			if(cmdID == 1) {	// STEP
-				// seek command detected
 				w->currentCommandName = "STEP";
 				printf("%s command in WD1797 command register\n", w->currentCommandName);
-				// do seek stuff....
+				// do step stuff....
 			}
 			else if(cmdID == 2) {	//STEP-IN
-				// seek command detected
 				w->currentCommandName = "STEP-IN";
 				printf("%s command in WD1797 command register\n", w->currentCommandName);
-				// do seek stuff....
+				// do step-in stuff....
 			}
 			else {	// STEP-OUT
-				// seek command detected
 				w->currentCommandName = "STEP-OUT";
 				printf("%s command in WD1797 command register\n", w->currentCommandName);
-				// do seek stuff....
+				// do step-out stuff....
 			}
 		}
 

@@ -13,7 +13,9 @@ int main(int argc, char* argv[]) {
   // print pointer for new jwd1797 yo verify creation
   printf("jwd1797 pointer: %p\n\n", jwd1797);
 
-  writeJWD1797(jwd1797, 0xb0, 0b00000011);
+  int port = 0xb0;
+
+  writeJWD1797(jwd1797, port, 0b00010011);
 
   return 0;
 }
