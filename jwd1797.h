@@ -35,18 +35,32 @@ int stepRate;
 
 char* currentCommandName;
 int currentCommandType;
+
+// TYPE I command flags
 int verifyFlag;
 int headLoadFlag;
 int trackUpdateFlag;
 
+// TYPE II/III command flags
+int dataAddressMark;
+int updateSSO;
+int delay15ms;
+int swapSectorLength;
+int multipleRecords;
 
+// TYPE IV - interrupt condition flags
+int interruptNRtoR;
+int interruptRtoNR;
+int interruptIndexPulse;
+int interruptImmediate;
 
 } JWD1797;
 
 JWD1797* newJWD1797();
-
 void resetJWD1797(JWD1797*);
 void writeJWD1797(JWD1797*, unsigned int addr, unsigned int value);
 unsigned int readJWD1797(JWD1797*, unsigned int addr);
 void doJWD1797Cycle(JWD1797*, double cycles);
 void doJWD1797Command(JWD1797*);
+void printAllRegisters(JWD1797*);
+void printCommandFlags(JWD1797*);
