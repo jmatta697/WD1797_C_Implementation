@@ -54,13 +54,16 @@ int interruptRtoNR;
 int interruptIndexPulse;
 int interruptImmediate;
 
+// TESTING
+double master_clock;
+
 } JWD1797;
 
 JWD1797* newJWD1797();
 void resetJWD1797(JWD1797*);
-void writeJWD1797(JWD1797*, unsigned int addr, unsigned int value);
-unsigned int readJWD1797(JWD1797*, unsigned int addr);
-void doJWD1797Cycle(JWD1797*, double cycles);
+void writeJWD1797(JWD1797*, unsigned int, unsigned int);
+unsigned int readJWD1797(JWD1797*, unsigned int);
+void doJWD1797Cycle(JWD1797*, double);
 void doJWD1797Command(JWD1797*);
 void printAllRegisters(JWD1797*);
 void printCommandFlags(JWD1797*);

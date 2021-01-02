@@ -36,6 +36,7 @@ JWD1797* newJWD1797() {
 void resetJWD1797(JWD1797* jwd_controller) {
   // reset all fields and registers
   //...
+	jwd_controller->master_clock = 0.0;
 
   // open current file "in" drive
   disk_img = fopen("z-dos-1.img", "rb");
@@ -80,9 +81,12 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 
 }
 
-// ***
+/* clocks the WD1797 chip (Z-100 uses a 1 MHz clock)
+	a cycle should happen every 0.000001 seconds - every 1 microsecond
+  main program will add the amount of calculated time from the previous
+	instruction to the internal WD1797 timers */
 void doJWD1797Cycle(JWD1797* w, double us) {
-
+	w->master_clock += us;
 }
 
 /* WD1797 accepts 11 different commands - this function will register the
