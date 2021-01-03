@@ -55,7 +55,12 @@ int interruptIndexPulse;
 int interruptImmediate;
 
 // TESTING
-double master_clock;
+double master_timer;
+
+double index_pulse_timer;
+double index_encounter_timer;
+// index pulse (IP) pin from drive to controller
+int index_pulse;
 
 } JWD1797;
 

@@ -90,7 +90,7 @@ int main(int argc, char* argv[]) {
   writeJWD1797(jwd1797, port, 0b11010101);
   printCommandFlags(jwd1797);
 
-  // various instruction timings
+  // simulate various instruction timings
   double instruction_times[6] = {0.8, 1.0, 1.2, 2.6, 2.8, 4.0};
   // seed rand
   srand(time(NULL));
@@ -102,7 +102,7 @@ int main(int argc, char* argv[]) {
     double instr_t = instruction_times[rand()%6];
     printf("%f\n", instr_t);
     doJWD1797Cycle(jwd1797, instr_t);
-    printf("%s%f\n","Master CLOCK: ", jwd1797->master_clock);
+    printf("%s%f\n","Master CLOCK: ", jwd1797->master_timer);
   }
 
   return 0;

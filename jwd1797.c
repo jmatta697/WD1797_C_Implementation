@@ -10,6 +10,11 @@
 #include "jwd1797.h"
 #include "utility_functions.h"
 
+// an index hole is encountered every 0.2 seconds with a 300 RPM drive
+#define INDEX_HOLE_ENCOUNTER_US 200000
+// index hole pulses last for 20 microseconds (WD1797 docs)
+#define INDEX_HOLE_PULSE_US 20
+
 // extern e8259_t* e8259_slave;
 
 FILE* disk_img;
@@ -24,19 +29,21 @@ JWD1797* newJWD1797() {
   reset (set to low) when the status register is read or when the commandRegister
   is loaded with a new command */
 
-// the wd1797 has a 1MHz clock in the Z100
-
-// number of sectors per track can be 1-255
-// number of tracks can be from 0-255
-// IBM 3740 - 128 bytes/sector :: 26 sectors/track
-/* System 34 - 256 bytes/sector :: 26 sectors/track
-              1024 bytes/sector :: 8 sectors/track */
-
+// the wd1797 has a 1MHz clock in the Z100 for 5.25" floppy
 
 void resetJWD1797(JWD1797* jwd_controller) {
   // reset all fields and registers
   //...
-	jwd_controller->master_clock = 0.0;
+	jwd_controller->master_timer = 0.0;
+	jwd_controller->index_pulse_timer = 0.0;
+	jwd_controller->index_encounter_timer = 0.0;
+	// index pulse (IP) pin from drive to controller
+	jwd_controller->index_pulse = 0;
+
+	jwd_controller->interruptNRtoR = 0;
+	jwd_controller->interruptRtoNR = 0;
+	jwd_controller->interruptIndexPulse = 0;
+	jwd_controller->interruptImmediate = 0;
 
   // open current file "in" drive
   disk_img = fopen("z-dos-1.img", "rb");
@@ -86,7 +93,31 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
   main program will add the amount of calculated time from the previous
 	instruction to the internal WD1797 timers */
 void doJWD1797Cycle(JWD1797* w, double us) {
-	w->master_clock += us;
+	// DEBUG clock
+	w->master_timer += us;
+
+	w->index_encounter_timer += us;
+	// only increment index pulse timer if index pulse is high (1)
+	if(w->index_pulse) {
+		w->index_pulse_timer += us;
+	}
+
+	// check index pulse encountered
+	if(w->index_encounter_timer >= INDEX_HOLE_ENCOUNTER_US) {
+		w->index_pulse = 1;
+		// reset index hole encounter timer
+		w->index_encounter_timer = 0.0;
+	}
+	// check index pulse timer
+	if(w->index_pulse_timer >= INDEX_HOLE_PULSE_US) {
+		w->index_pulse = 0;
+		// reset index pulse timer
+		w->index_pulse_timer = 0.0;
+	}
+
+	/* check if instruction is completed - generate INTERRUPT (INTRQ connected
+	to I0 of slave interrupt controller -> I3 of master int controller */
+
 }
 
 /* WD1797 accepts 11 different commands - this function will register the
@@ -101,11 +132,12 @@ void doJWD1797Command(JWD1797* w) {
 	// if the 4 high bits are 0b1101, the command is a force interrupt
 	if(((w->commandRegister>>4) & 15) == 13) {
 
-		/* clear all interrupt flags here -- DEBUG/TESTING */
+		/* DEBUG/TESTING - clear all interrupt flags here  */
 		w->interruptNRtoR = 0;
 		w->interruptRtoNR = 0;
 		w->interruptIndexPulse = 0;
 		w->interruptImmediate = 0;
+		// DEBUG ABOVE ^^^^
 
 		printf("TYPE IV Command in WD1797 command register (Force Interrupt)..\n");
 		w->currentCommandType = 4;
@@ -147,7 +179,6 @@ void doJWD1797Command(JWD1797* w) {
 		int rateBits = w->commandRegister & 3;
 		// set flags according to command bits
 		w->stepRate = rates[rateBits];
-		// printf("%s%d%s\n", "Stepping motor rate is set to ", rates[rateBits], " ms");
 		w->verifyFlag = (w->commandRegister>>2) & 1;
 		w->headLoadFlag = (w->commandRegister>>3) & 1;
 
