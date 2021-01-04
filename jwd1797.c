@@ -37,8 +37,10 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->master_timer = 0.0;
 	jwd_controller->index_pulse_timer = 0.0;
 	jwd_controller->index_encounter_timer = 0.0;
+	jwd_controller->step_timer = 0.0;
 	// index pulse (IP) pin from drive to controller
 	jwd_controller->index_pulse = 0;
+	jwd_controller->stepDirection = 0;
 
 	jwd_controller->interruptNRtoR = 0;
 	jwd_controller->interruptRtoNR = 0;
@@ -47,6 +49,8 @@ void resetJWD1797(JWD1797* jwd_controller) {
 
   // open current file "in" drive
   disk_img = fopen("z-dos-1.img", "rb");
+	// point to first byte on disk (byte 0x00 in loaded .img file)
+	jwd_controller->disk_img_index_pointer = 0;
 }
 
 // read data from wd1797 according to port
@@ -103,16 +107,21 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 	}
 
 	// check index pulse encountered
-	if(w->index_encounter_timer >= INDEX_HOLE_ENCOUNTER_US) {
+	if(!w->index_pulse && w->index_encounter_timer >= INDEX_HOLE_ENCOUNTER_US) {
 		w->index_pulse = 1;
 		// reset index hole encounter timer
 		w->index_encounter_timer = 0.0;
 	}
 	// check index pulse timer
-	if(w->index_pulse_timer >= INDEX_HOLE_PULSE_US) {
+	if(w->index_pulse && w->index_pulse_timer >= INDEX_HOLE_PULSE_US) {
 		w->index_pulse = 0;
 		// reset index pulse timer
 		w->index_pulse_timer = 0.0;
+	}
+	// check if command is still active and do command step if so...
+	if(!w->command_done) {
+		// do command step
+		commandStep(w, us);
 	}
 
 	/* check if instruction is completed - generate INTERRUPT (INTRQ connected
@@ -128,6 +137,9 @@ void doJWD1797Command(JWD1797* w) {
     - When a command is being executed - the BUSY status is set
     - When a command is completed, an interrupt is generated and
     the BUSY status bit is reset */
+
+	// get busy status bit from status register (bit 0)
+	int busy_status = w->statusRegister & 1;
 
 	// if the 4 high bits are 0b1101, the command is a force interrupt
 	if(((w->commandRegister>>4) & 15) == 13) {
@@ -169,8 +181,15 @@ void doJWD1797Command(JWD1797* w) {
 	/* determine if command in command register is a TYPE I command by checking
 		if the 7 bit is a zero (noly TYPE I commands have a zero (0) in the 7 bit) */
 	else if(((w->commandRegister>>7) & 1) == 0) {
+		// check busy status
+		if(busy_status) {
+			printf("%s\n", "Cannot execute command placed into command register!");
+			printf("%s\n", "Another command is currently processing! (BUSY STATUS)");
+			return;
+		}
 		// printf("TYPE I Command in WD1797 command register..\n");
 		w->currentCommandType = 1;
+		w->command_done = 0;
 
 		// establish step rate options for 1MHz clock (only used with TYPE I cmds)
 		int rates[] = {6, 12, 20, 30};
@@ -235,7 +254,16 @@ void doJWD1797Command(JWD1797* w) {
 		 (Read Sector) or 0b101 (Write Sector) as the high 3 bits */
 	else if(((w->commandRegister>>5) & 7) < 6) {
 		printf("TYPE II Command in WD1797 command register..\n");
+
+		// check busy status
+		if(busy_status) {
+			printf("%s\n", "Cannot execute command placed into command register!");
+			printf("%s\n", "Another command is currently processing! (BUSY STATUS)");
+			return;
+		}
+
 		w->currentCommandType = 2;
+		w->command_done = 0;
 		/* set TYPE II flags */
 		w->updateSSO = (w->commandRegister>>1) & 1;
 		w->delay15ms = (w->commandRegister>>2) & 1;
@@ -267,7 +295,16 @@ void doJWD1797Command(JWD1797* w) {
 		 then 5 in their shifted 3 high bits */
 	else if(((w->commandRegister>>5) & 7) > 5) {
 		printf("TYPE III Command in WD1797 command register..\n");
+
+		// check busy status
+		if(busy_status) {
+			printf("%s\n", "Cannot execute command placed into command register!");
+			printf("%s\n", "Another command is currently processing! (BUSY STATUS)");
+			return;
+		}
+
 		w->currentCommandType = 3;
+		w->command_done = 0;
 
 		/* set TYPE III flags */
 		w->updateSSO = (w->commandRegister>>1) & 1;
@@ -306,8 +343,11 @@ void doJWD1797Command(JWD1797* w) {
 
 }
 
-// ***
+// execute command step
+// us is the time that passed since the last CPU instruction
 int commandStep(JWD1797* w, double us) {
+	/* do what needs to be done based on which command is still active and based
+		on certain timer */
 
 }
 
