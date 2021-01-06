@@ -76,9 +76,15 @@ int track00_not_pin;
 int direction_pin;
 int test_not_pin;
 
+// computer interface pins
+int drq;
+int intrq;
+
+//
+int current_track;
+
+
 } JWD1797;
-
-
 
 JWD1797* newJWD1797();
 void resetJWD1797(JWD1797*);
@@ -86,6 +92,16 @@ void writeJWD1797(JWD1797*, unsigned int, unsigned int);
 unsigned int readJWD1797(JWD1797*, unsigned int);
 void doJWD1797Cycle(JWD1797*, double);
 void doJWD1797Command(JWD1797*);
+
 int commandStep(JWD1797*, double);
 void printAllRegisters(JWD1797*);
 void printCommandFlags(JWD1797*);
+void type_I_Status_Reset(JWD1797*);
+void setupForcedIntCommand(JWD1797*);
+void setupTypeICommand(JWD1797*);
+void setTypeICommand(JWD1797*);
+void setupTypeIICommand(JWD1797*);
+void setTypeIICommand(JWD1797*);
+void setupTypeIIICommand(JWD1797*);
+void setTypeIIICommand(JWD1797*);
+void printBusyMsg();
