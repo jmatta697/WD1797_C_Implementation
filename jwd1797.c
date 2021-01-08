@@ -3,19 +3,33 @@
 // email: jmatta1980@hotmail.com
 // November 2020
 
+// Notes:
+/* clock is assumed to be 1 MHz for single and double density mini-floppy disks
+	(5.25" ) */
+/* Z-DOS disks are 360k disks - 40 cylinders/2 heads (sides)/9 sectors per track/
+	512 bytes per sector */
+// A 300 RPM motor speed is also assumed
+// NO write protect functionality
+
 // jwd1797.c
+
 
 #include <stdlib.h>
 #include <stdio.h>
 #include "jwd1797.h"
 #include "utility_functions.h"
 
+// ** ALL TIMINGS in microseconds **
 // an index hole is encountered every 0.2 seconds with a 300 RPM drive
 #define INDEX_HOLE_ENCOUNTER_US 200000
 // index hole pulses last for 20 microseconds (WD1797 docs)
 #define INDEX_HOLE_PULSE_US 20
-// head load timing (HLT pin reamins low for this amount of time)
-#define HEAD_LOAD_TIMING 50
+// when non-busy status and HLD high, reset HLD after 15 index pulses
+#define HLD_IDLE_RESET_LIMIT 15*INDEX_HOLE_ENCOUNTER_US
+// head load timing (this can be set from 30-100 ms, depending on drive)
+#define HEAD_LOAD_TIMING_LIMIT 65*1000	// set to 65 ms (65,000 us)
+// verify time is 30 milliseconds for a 1MHz clock
+#define VERIFY_TIME 30*1000
 
 // extern e8259_t* e8259_slave;
 
@@ -111,54 +125,39 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 void doJWD1797Cycle(JWD1797* w, double us) {
 	// DEBUG clock
 	w->master_timer += us;
-
 	w->index_encounter_timer += us;
+	handleHLTTimer(w, us);
+	// Type I status bit 5 (S5) will be set if HLD and HLT pins are high
+	if(w->currentCommandType == 1 && w->HLD_pin && w->HLT_pin) {
+		w->statusRegister |= 0b00100000;
+	}
 	// only increment index pulse timer if index pulse is high (1)
-	if(w->index_pulse) {
-		w->index_pulse_timer += us;
-	}
-
+	if(w->index_pulse) {w->index_pulse_timer += us;}
 	// check index pulse encountered
-	if(!w->index_pulse && w->index_encounter_timer >= INDEX_HOLE_ENCOUNTER_US) {
-		w->index_pulse = 1;
-		// reset index hole encounter timer
-		w->index_encounter_timer = 0.0;
-	}
-	// check index pulse timer
-	if(w->index_pulse && w->index_pulse_timer >= INDEX_HOLE_PULSE_US) {
-		w->index_pulse = 0;
-		// reset index pulse timer
-		w->index_pulse_timer = 0.0;
-	}
+	handleIndexPulse(w);
 	// check if command is still active and do command step if so...
 	if(!w->command_done) {
 		// do command step
 		commandStep(w, us);
 	}
-
-	/* check if instruction is completed - generate INTERRUPT (INTRQ connected
-	to I0 of slave interrupt controller -> I3 of master int controller */
-
+	// HLD pin will reset if drive is not busy and 15 index pulses happen
+	handleHLDIdle(w, us);
 }
 
 /* WD1797 accepts 11 different commands - this function will register the
 	command and set all paramenters associated with it */
 void doJWD1797Command(JWD1797* w) {
-	// get busy status bit from status register (bit 0)
-	int busy = w->statusRegister & 1;
-
 	// if the 4 high bits are 0b1101, the command is a force interrupt
-	if(((w->commandRegister>>4) & 15) == 13) {
-		setupForcedIntCommand(w);
-	}
+	if(((w->commandRegister>>4) & 15) == 13) {setupForcedIntCommand(w); return;}
+
+	// if not TYPE IV (forced interrupt), get busy status bit from status register (bit 0)
+	int busy = w->statusRegister & 1;
+	// check busy status
+	if(busy) {printBusyMsg(); return;}
+
 	/* determine if command in command register is a TYPE I command by checking
 		if the 7 bit is a zero (noly TYPE I commands have a zero (0) in the 7 bit) */
-	else if(((w->commandRegister>>7) & 1) == 0) {
-		// check busy status
-		if(busy) {
-			printBusyMsg();
-			return;
-		}
+	if(((w->commandRegister>>7) & 1) == 0) {
 		setupTypeICommand(w);
 		setTypeICommand(w);
 	}
@@ -167,10 +166,11 @@ void doJWD1797Command(JWD1797* w) {
 		 (Read Sector) or 0b101 (Write Sector) as the high 3 bits */
 	else if(((w->commandRegister>>5) & 7) < 6) {
 		printf("TYPE II Command in WD1797 command register..\n");
-		// check busy status
-		if(busy) {
-			printBusyMsg();
-			return;
+		// sample READY input from DRIVE
+		if(!w->ready) {
+			// ** generate interrupt **
+			w->intrq = 1; // MUST SEND INTERRUPT to slave int controller also...
+			return; // do not execute command
 		}
 		setupTypeIICommand(w);
 		setTypeIICommand(w);
@@ -180,10 +180,11 @@ void doJWD1797Command(JWD1797* w) {
 		 then 5 in their shifted 3 high bits */
 	else if(((w->commandRegister>>5) & 7) > 5) {
 		printf("TYPE III Command in WD1797 command register..\n");
-		// check busy status
-		if(busy) {
-			printBusyMsg();
-			return;
+		// sample READY input from DRIVE
+		if(!w->ready) {
+			// ** generate interrupt **
+			w->intrq = 1; // MUST SEND INTERRUPT to slave int controller also...
+			return; // do not execute command
 		}
 		setupTypeIIICommand(w);
 		setTypeIIICommand(w);
@@ -199,8 +200,35 @@ void doJWD1797Command(JWD1797* w) {
 int commandStep(JWD1797* w, double us) {
 	/* do what needs to be done based on which command is still active and based
 		on certain timer */
+		if(w->currentCommandType == 1 && w->step_timer >= (w->stepRate*1000)) {
+
+		}
 		if(w->currentCommandName == "RESTORE") {
-			//...
+			//...do restore stuff
+			// check TR00 pin
+			if(!w->not_track00_pin) {	// indicates r/w head is over track 00
+				w->trackRegister = 0;
+				// **** generate interrupt ****
+				w->intrq = 1;
+			}
+			else {	// r/w head is not over track 00
+
+			}
+			// after all steps are done... reached track 00
+			// take care of delayed HLD
+			if(w->delayed_HLD) {
+				w->HLT_timer_active = 1;
+				w->HLT_timer = 0.0;
+				w->HLD_pin = 1;
+				w->HLD_idle_reset_timer = 0.0;
+			}
+
+			// if done - reset (clear) busy status bit and generate interrupt
+			w->command_done = 1;
+			w->statusRegister &= 0b11111110;
+			w->intrq = 1;
+			// ****** send signal to slave I0 on 8259 here ********
+
 		}
 }
 
@@ -210,6 +238,221 @@ int commandStep(JWD1797* w, double us) {
 	+++++++++++++++++ HELPER FUNCTIONS ++++++++++++++++++++++++++++++++++++++++++
 	+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 */
+
+void setupTypeICommand(JWD1797* w) {
+	// printf("TYPE I Command in WD1797 command register..\n");
+	w->currentCommandType = 1;
+	w->command_done = 0;
+	// set appropriate status bits for type I command
+	typeIStatusReset(w);
+	// establish step rate options for 1MHz clock (only used with TYPE I cmds)
+	int rates[] = {6, 12, 20, 30};
+	// get rate bit
+	int rateBits = w->commandRegister & 3;
+	// set flags according to command bits
+	w->stepRate = rates[rateBits];
+	w->verifyFlag = (w->commandRegister>>2) & 1;
+	w->headLoadFlag = (w->commandRegister>>3) & 1;
+	// HLD set according to V and h flags of type I command
+	if(!w->headLoadFlag && !w->verifyFlag) {w->HLD_pin = 0; w->HLT_pin = 0;}
+	else if(w->headLoadFlag && !w->verifyFlag && w->HLD_pin == 0) {
+		//w->HLT_timer_active = 1;
+		//w->HLT_timer = 0.0;
+		w->HLD_pin = 1;
+		w->HLD_idle_reset_timer = 0.0;
+	}
+	else if(!w->headLoadFlag && w->verifyFlag && w->HLD_pin == 0) {w->delayed_HLD = 1;}
+	else if(w->headLoadFlag && w->verifyFlag && w->HLD_pin == 0) {
+		w->HLT_timer_active = 1;
+		w->HLT_timer = 0.0;
+		w->HLD_pin = 1;
+		w->HLD_idle_reset_timer = 0.0;
+	}
+	// initialize command type I timer
+	w->command_typeI_timer = 0.0;
+	// add appropriate time based on V flag (1 MHz clock) 30,000 us
+	if(w->verifyFlag) {w->command_typeI_timer += 30*1000;}
+}
+
+void setupTypeIICommand(JWD1797* w) {
+	w->currentCommandType = 2;
+	w->command_done = 0;
+	// set busy status
+	w->statusRegister |= 1;
+	/* set TYPE II flags */
+	w->updateSSO = (w->commandRegister>>1) & 1;
+	w->delay15ms = (w->commandRegister>>2) & 1;
+	w->swapSectorLength = (w->commandRegister>>3) & 1;
+	w->multipleRecords = (w->commandRegister>>4) & 1;
+	updateTG43Signal(w);
+	w->HLD_pin = 1;
+	// initialize HLD idle timer (set to 15 index pulses)
+	w->HLD_idle_reset_timer = 0.0;
+	// initialize command type I timer
+	w->command_typeII_timer = 0.0;
+	// add appropriate time based on E flag 15,000 us
+	if(w->delay15ms) {w->command_typeII_timer += 15*1000;}
+}
+
+void setupTypeIIICommand(JWD1797* w) {
+	w->currentCommandType = 3;
+	w->command_done = 0;
+	// set busy status
+	w->statusRegister |= 1;
+	/* set TYPE III flags */
+	w->updateSSO = (w->commandRegister>>1) & 1;
+	w->delay15ms = (w->commandRegister>>2) & 1;
+	updateTG43Signal(w);
+	w->HLD_pin = 1;
+	// initialize HLD idle timer (set to 15 index pulses)
+	w->HLD_idle_reset_timer = 0.0;
+	// initialize command type I timer
+	w->command_typeIII_timer = 0.0;
+	// add appropriate time based on E flag 15,000 us
+	if(w->delay15ms) {w->command_typeII_timer += 15*1000;}
+}
+
+void setupForcedIntCommand(JWD1797* w) {
+	/* %%%%%% DEBUG/TESTING - clear all interrupt flags here  */
+	w->interruptNRtoR = 0;
+	w->interruptRtoNR = 0;
+	w->interruptIndexPulse = 0;
+	w->interruptImmediate = 0;
+	// %%%%%%% DEBUG ABOVE ^^^^
+	printf("TYPE IV Command in WD1797 command register (Force Interrupt)..\n");
+	w->currentCommandType = 4;
+	// get the interrupt condition bits (I0-I3) - the lowest 4 bits of the interrupt command
+	int int_condition_bits = w->commandRegister & 15;
+	// set interrupt condition(s)
+	if(int_condition_bits & 1) {
+		printf("%s\n", "INTRQ on NOT READY to READY transition");
+		w->interruptNRtoR = 1;
+	}
+	if((int_condition_bits>>1) & 1) {
+		printf("%s\n", "INTRQ on READY to NOT READY transition");
+		w->interruptRtoNR = 1;
+	}
+	if((int_condition_bits>>2) & 1) {
+		printf("%s\n", "INTRQ on INDEX PULSE");
+		w->interruptIndexPulse = 1;
+	}
+	if((int_condition_bits>>3) & 1) {
+		printf("%s\n", "INTRQ and IMMEDIATE INTERRUPT");
+		w->interruptImmediate = 1;
+	}
+	if(int_condition_bits == 0) {
+		printf("%s\n", "NO INTRQ and TERMINATE COMMAND IMMEDIATELY");
+		w->terminate_command = 1;
+	}
+}
+
+void setTypeICommand(JWD1797* w) {
+	// get 4 high bits of command register to determine the specific command
+	int highBits = ((w->commandRegister>>4) & 15);	// examine 4 high bits
+
+	if(highBits < 2) { // RESTORE or SEEK command
+		if((highBits&1) == 0) {	// RESTORE command
+			w->currentCommandName = "RESTORE";
+			printf("%s command in WD1797 command register\n", w->currentCommandName);
+		}
+		else if((highBits&1) == 1) {	// SEEK command
+			w->currentCommandName = "SEEK";
+			printf("%s command in WD1797 command register\n", w->currentCommandName);
+		}
+		// check error
+		else {
+			printf("%s\n", "Something went wrong! Cannot determine RESTORE or SEEK!");
+		}
+	}
+	else { // STEP, STEP-IN or STEP-OUT commands
+		// set track register update flag
+		w->trackUpdateFlag = (w->commandRegister>>4) & 1;
+		// determine which command by examining highest three bits of cmd reg
+		int cmdID = (w->commandRegister>>5) & 7;
+		if(cmdID == 1) {	// STEP
+			w->currentCommandName = "STEP";
+			printf("%s command in WD1797 command register\n", w->currentCommandName);
+		}
+		else if(cmdID == 2) {	//STEP-IN
+			w->currentCommandName = "STEP-IN";
+			printf("%s command in WD1797 command register\n", w->currentCommandName);
+		}
+		else if(cmdID == 3)  {	// STEP-OUT
+			w->currentCommandName = "STEP-OUT";
+			printf("%s command in WD1797 command register\n", w->currentCommandName);
+		}
+		// check error
+		else {
+			printf("%s\n", "Something went wrong! Cannot determine which TYPE I STEP command!");
+		}
+	}
+}
+
+void setTypeIICommand(JWD1797* w) {
+	// determine which command by examining highest three bits of cmd reg
+	int cmdID = (w->commandRegister>>5) & 7;
+	// check if READ SECTOR (high 3 bits == 0b100)
+	if(cmdID == 4) {
+		w->currentCommandName = "READ SECTOR";
+		printf("%s command in WD1797 command register\n", w->currentCommandName);
+	}
+	else if(cmdID == 5) {
+		w->currentCommandName = "WRITE SECTOR";
+		printf("%s command in WD1797 command register\n", w->currentCommandName);
+		// set Data Address Mark flag
+		w->dataAddressMark = w->commandRegister & 1;
+	}
+	// check error
+	else {
+		printf("%s\n", "Something went wrong! Cannot determine which TYPE II command!");
+	}
+}
+
+void setTypeIIICommand(JWD1797* w) {
+	// determine which command by examining highest 4 bits of cmd reg
+	int cmdID = (w->commandRegister>>4) & 15;
+	// READ ADDRESS
+	if(cmdID == 12) {
+		w->currentCommandName = "READ ADDRESS";
+		printf("%s command in WD1797 command register\n", w->currentCommandName);
+	}
+	// READ TRACK
+	else if(cmdID == 14) {
+		w->currentCommandName = "READ TRACK";
+		printf("%s command in WD1797 command register\n", w->currentCommandName);
+	}
+	// WRITE TRACK
+	else if(cmdID == 15) {
+		w->currentCommandName = "WRITE TRACK";
+		printf("%s command in WD1797 command register\n", w->currentCommandName);
+	}
+	// check error
+	else {
+		printf("%s\n", "Something went wrong! Cannot determine which TYPE III command!");
+	}
+}
+
+void typeIStatusReset(JWD1797* w) {
+	// set BUSY bit
+	w->statusRegister |= 0b00000001;
+	// reset CRC ERROR, SEEK ERROR bits
+	w->statusRegister &= 0b11100111;
+	// reset DRQ, INTRQ pins
+	w->drq = 0;
+	w->intrq = 0;
+}
+
+void printBusyMsg() {
+	printf("%s\n", "Cannot execute command placed into command register!");
+	printf("%s\n", "Another command is currently processing! (BUSY STATUS)");
+}
+
+void updateTG43Signal(JWD1797* w) {
+	// update TG43 signal
+	if(w->current_track > 43) {w->tg43_pin = 1;}
+	else if(w->current_track <= 43) {w->tg43_pin = 0;}
+}
+
 /* helper function to compute CRC */
 void computeCRC(int initialValue, int* bytes, int len, int* result) {
 	unsigned short initial=(unsigned short)initialValue;
@@ -282,188 +525,47 @@ void printCommandFlags(JWD1797* w) {
 	}
 }
 
-void setupForcedIntCommand(JWD1797* w) {
-	/* DEBUG/TESTING - clear all interrupt flags here  */
-	w->interruptNRtoR = 0;
-	w->interruptRtoNR = 0;
-	w->interruptIndexPulse = 0;
-	w->interruptImmediate = 0;
-	// DEBUG ABOVE ^^^^
-	printf("TYPE IV Command in WD1797 command register (Force Interrupt)..\n");
-	w->currentCommandType = 4;
-	// do force interrupt stuff...
-	// get the interrupt condition bits (I0-I3) - the lowest 4 bits of the interrupt command
-	int int_condition_bits = w->commandRegister & 15;
-	// set interrupt condition(s)
-	if(int_condition_bits & 1) {
-		printf("%s\n", "INTRQ on NOT READY to READY transition");
-		w->interruptNRtoR = 1;
+void handleIndexPulse(JWD1797* w) {
+	if(!w->index_pulse && w->index_encounter_timer >= INDEX_HOLE_ENCOUNTER_US) {
+		w->index_pulse = 1;
+		// set IP status if TYPE I command is active
+		if(w->currentCommandType == 1) {w->statusRegister |= 0b00000010;}
+		// reset index hole encounter timer
+		w->index_encounter_timer = 0.0;
 	}
-	if((int_condition_bits>>1) & 1) {
-		printf("%s\n", "INTRQ on READY to NOT READY transition");
-		w->interruptRtoNR = 1;
-	}
-	if((int_condition_bits>>2) & 1) {
-		printf("%s\n", "INTRQ on INDEX PULSE");
-		w->interruptIndexPulse = 1;
-	}
-	if((int_condition_bits>>3) & 1) {
-		printf("%s\n", "INTRQ and IMMEDIATE INTERRUPT");
-		w->interruptImmediate = 1;
-	}
-	if(int_condition_bits == 0) {
-		printf("%s\n", "NO INTRQ and TERMINATE COMMAND IMMEDIATELY");
+	// check index pulse timer
+	if(w->index_pulse && w->index_pulse_timer >= INDEX_HOLE_PULSE_US) {
+		w->index_pulse = 0;
+		// clear IP status if TYPE I command is active
+		if(w->currentCommandType == 1) {w->statusRegister &= 0b11111101;}
+		// reset index pulse timer
+		w->index_pulse_timer = 0.0;
 	}
 }
 
-void setupTypeICommand(JWD1797* w) {
-	// printf("TYPE I Command in WD1797 command register..\n");
-	w->currentCommandType = 1;
-	w->command_done = 0;
-
-	// set appropriate status bits for type I command
-	type_I_Status_Reset(w);
-
-	// establish step rate options for 1MHz clock (only used with TYPE I cmds)
-	int rates[] = {6, 12, 20, 30};
-
-	// get rate bit
-	int rateBits = w->commandRegister & 3;
-	// set flags according to command bits
-	w->stepRate = rates[rateBits];
-	w->verifyFlag = (w->commandRegister>>2) & 1;
-	w->headLoadFlag = (w->commandRegister>>3) & 1;
-
-	// HLD set according to V and h flags of type I command
-	if(!w->headLoadFlag && !w->verifyFlag) {w->HLD_pin = 0;}
-	else if(w->headLoadFlag && !w->verifyFlag) {w->HLD_pin = 1;}
-}
-
-void setTypeICommand(JWD1797* w) {
-	// get 4 high bits of command register to determine the specific command
-	int highBits = ((w->commandRegister>>4) & 15);	// examine 4 high bits
-
-	if(highBits < 2) { // RESTORE or SEEK command
-		if((highBits&1) == 0) {	// RESTORE command
-			w->currentCommandName = "RESTORE";
-			printf("%s command in WD1797 command register\n", w->currentCommandName);
-			// do restore stuff.....
-		}
-		else if((highBits&1) == 1) {	// SEEK command
-			w->currentCommandName = "SEEK";
-			printf("%s command in WD1797 command register\n", w->currentCommandName);
-			// do seek stuff.....
-		}
-		// check error
-		else {
-			printf("%s\n", "Something went wrong! Cannot determine RESTORE or SEEK!");
-		}
-	}
-	else { // STEP, STEP-IN or STEP-OUT commands
-		// set track register update flag
-		w->trackUpdateFlag = (w->commandRegister>>4) & 1;
-		// determine which command by examining highest three bits of cmd reg
-		int cmdID = (w->commandRegister>>5) & 7;
-		if(cmdID == 1) {	// STEP
-			w->currentCommandName = "STEP";
-			printf("%s command in WD1797 command register\n", w->currentCommandName);
-			// do step stuff....
-		}
-		else if(cmdID == 2) {	//STEP-IN
-			w->currentCommandName = "STEP-IN";
-			printf("%s command in WD1797 command register\n", w->currentCommandName);
-			// do step-in stuff....
-		}
-		else if(cmdID == 3)  {	// STEP-OUT
-			w->currentCommandName = "STEP-OUT";
-			printf("%s command in WD1797 command register\n", w->currentCommandName);
-			// do step-out stuff....
-		}
-		// check error
-		else {
-			printf("%s\n", "Something went wrong! Cannot determine which TYPE I STEP command!");
+void handleHLDIdle(JWD1797* w, double time) {
+	// if drive not busy (idle)
+	int busy = w->statusRegister & 1;
+	if(!busy && w->HLD_pin == 1) {
+		// increase the HLD idle timer by the incoming processor instruction time
+		w->HLD_idle_reset_timer += time;
+		// check to see if HLD must be reset because of idle
+		if(w->HLD_idle_reset_timer >= HLD_IDLE_RESET_LIMIT) {
+			w->HLD_pin = 0;
+			w->HLD_idle_reset_timer = 0.0;
 		}
 	}
 }
 
-void setupTypeIICommand(JWD1797* w) {
-	w->currentCommandType = 2;
-	w->command_done = 0;
-	/* set TYPE II flags */
-	w->updateSSO = (w->commandRegister>>1) & 1;
-	w->delay15ms = (w->commandRegister>>2) & 1;
-	w->swapSectorLength = (w->commandRegister>>3) & 1;
-	w->multipleRecords = (w->commandRegister>>4) & 1;
-}
-
-void setTypeIICommand(JWD1797* w) {
-	// determine which command by examining highest three bits of cmd reg
-	int cmdID = (w->commandRegister>>5) & 7;
-	// check if READ SECTOR (high 3 bits == 0b100)
-	if(cmdID == 4) {
-		w->currentCommandName = "READ SECTOR";
-		printf("%s command in WD1797 command register\n", w->currentCommandName);
-		// do read sector stuff....
+void handleHLTTimer(JWD1797* w, double time) {
+	// clock HLT delay timer if active
+	if(w->HLT_timer_active) {
+		w->HLT_timer += time;
+		// set HLT pin if timer expired
+		if(w->HLT_timer >= HEAD_LOAD_TIMING_LIMIT) {
+			w->HLT_pin = 1;
+			// reset timer
+			w->HLT_timer = 0.0;
+		}
 	}
-	else if(cmdID == 5) {
-		w->currentCommandName = "WRITE SECTOR";
-		printf("%s command in WD1797 command register\n", w->currentCommandName);
-		// set Data Address Mark flag
-		w->dataAddressMark = w->commandRegister & 1;
-		// do write sector stuff....
-	}
-	// check error
-	else {
-		printf("%s\n", "Something went wrong! Cannot determine which TYPE II command!");
-	}
-}
-
-void setupTypeIIICommand(JWD1797* w) {
-	w->currentCommandType = 3;
-	w->command_done = 0;
-	/* set TYPE III flags */
-	w->updateSSO = (w->commandRegister>>1) & 1;
-	w->delay15ms = (w->commandRegister>>2) & 1;
-}
-
-void setTypeIIICommand(JWD1797* w) {
-	// determine which command by examining highest 4 bits of cmd reg
-	int cmdID = (w->commandRegister>>4) & 15;
-	// READ ADDRESS
-	if(cmdID == 12) {
-		w->currentCommandName = "READ ADDRESS";
-		printf("%s command in WD1797 command register\n", w->currentCommandName);
-		// do read address stuff....
-	}
-	// READ TRACK
-	else if(cmdID == 14) {
-		w->currentCommandName = "READ TRACK";
-		printf("%s command in WD1797 command register\n", w->currentCommandName);
-		// do read track stuff....
-	}
-	// WRITE TRACK
-	else if(cmdID == 15) {
-		w->currentCommandName = "WRITE TRACK";
-		printf("%s command in WD1797 command register\n", w->currentCommandName);
-		// do write track stuff....
-	}
-	// check error
-	else {
-		printf("%s\n", "Something went wrong! Cannot determine which TYPE III command!");
-	}
-}
-
-void type_I_Status_Reset(JWD1797* w) {
-	// set BUSY bit
-	w->statusRegister |= 0b00000001;
-	// reset CRC ERROR, SEEK ERROR bits
-	w->statusRegister &= 0b11100111;
-	// reset DRQ, INTRQ pins
-	w->drq = 0;
-	w->intrq = 0;
-}
-
-void printBusyMsg() {
-	printf("%s\n", "Cannot execute command placed into command register!");
-	printf("%s\n", "Another command is currently processing! (BUSY STATUS)");
 }
