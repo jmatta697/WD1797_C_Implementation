@@ -29,7 +29,7 @@
 // head load timing (this can be set from 30-100 ms, depending on drive)
 #define HEAD_LOAD_TIMING_LIMIT 65*1000	// set to 65 ms (65,000 us)
 // verify time is 30 milliseconds for a 1MHz clock
-#define VERIFY_TIME 30*1000
+#define VERIFY_HEAD_SETTLING_LIMIT 30*1000
 
 // extern e8259_t* e8259_slave;
 
@@ -48,35 +48,75 @@ JWD1797* newJWD1797() {
 // the wd1797 has a 1MHz clock in the Z100 for 5.25" floppy
 
 void resetJWD1797(JWD1797* jwd_controller) {
-  // reset all fields and registers
-  //...
+	jwd_controller->dataShiftRegister = 0x00;
+	jwd_controller->dataRegister = 0x00;
+	jwd_controller->trackRegister = 0x00;
+	jwd_controller->sectorRegister = 0x00;
+	jwd_controller->commandRegister = 0x00;
 	jwd_controller->statusRegister = 0x00;
+	jwd_controller->CRCRegister = 0x00;
+
+	jwd_controller->disk_img_index_pointer = 0;
+
+	jwd_controller->ready = 0;	// start drive not ready
+	jwd_controller->stepDirection = 0;	// start direction step out -> track 00
+
+	jwd_controller->currentCommandName = "";
+	jwd_controller->currentCommandType = 0;
+
+	// TYPE I command bits
+	jwd_controller->stepRate = 0;	// bits 0 and 1 determine the step rate
+	jwd_controller->verifyFlag = 0;
+	jwd_controller->headLoadFlag = 0;
+	jwd_controller->trackUpdateFlag = 0;
+	// TYPE II and III command bits
+	jwd_controller->dataAddressMark = 0;
+	jwd_controller->updateSSO = 0;
+	jwd_controller->delay15ms = 0;
+	jwd_controller->swapSectorLength = 0;
+	jwd_controller->multipleRecords = 0;
+	// TYPE IV command (forced interrupt) conditions
+	jwd_controller->interruptNRtoR = 0;
+	jwd_controller->interruptRtoNR = 0;
+	jwd_controller->interruptIndexPulse = 0;
+	jwd_controller->interruptImmediate = 0;
+	// command step controls
+	jwd_controller->command_action_done = 0;
+	jwd_controller->command_done = 0;
+	jwd_controller->head_settling_done = 0;
+
+	jwd_controller->terminate_command = 0;
 
 	jwd_controller->master_timer = 0.0;
 	jwd_controller->index_pulse_timer = 0.0;
 	jwd_controller->index_encounter_timer = 0.0;
 	jwd_controller->step_timer = 0.0;
-	// index pulse (IP) pin from drive to controller
+	jwd_controller->verify_head_settling_timer = 0.0;
+	jwd_controller->command_typeII_timer = 0.0;
+	jwd_controller->command_typeIII_timer = 0.0;
+	jwd_controller->command_typeIV_timer = 0.0;
+	jwd_controller->HLD_idle_reset_timer = 0.0;
+	jwd_controller->HLT_timer = 0.0;
+
 	jwd_controller->index_pulse = 0;
-	jwd_controller->stepDirection = 0;
-	// processor pins reset
+	jwd_controller->ready_pin = 0;
+	jwd_controller->tg43_pin = 0;
+	jwd_controller->HLD_pin = 0;
+	jwd_controller->HLT_pin = 0;
+	jwd_controller->not_track00_pin = 0;
+	jwd_controller->direction_pin = 0;
+	// jwd_controller-> test_not_pin;
+
+	jwd_controller->delayed_HLD = 0;
+	jwd_controller->HLT_timer_active = 0;
+
 	jwd_controller->drq = 0;
 	jwd_controller->intrq = 0;
-
-	jwd_controller->interruptNRtoR = 0;
-	jwd_controller->interruptRtoNR = 0;
-	jwd_controller->interruptIndexPulse = 0;
-	jwd_controller->interruptImmediate = 0;
-
-	jwd_controller->currentCommandName = "";
-	jwd_controller->currentCommandType = 0;
 
 	jwd_controller->current_track = 0;
 
   // open current file "in" drive
   disk_img = fopen("z-dos-1.img", "rb");
-	// point to first byte on disk (byte 0x00 in loaded .img file)
-	jwd_controller->disk_img_index_pointer = 0;
 }
 
 // read data from wd1797 according to port
@@ -115,7 +155,6 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 		default:
 			printf("%X is an invalid port!\n", port_addr);
 	}
-
 }
 
 /* clocks the WD1797 chip (Z-100 uses a 1 MHz clock)
@@ -123,21 +162,19 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
   main program will add the amount of calculated time from the previous
 	instruction to the internal WD1797 timers */
 void doJWD1797Cycle(JWD1797* w, double us) {
-	// DEBUG clock
-	w->master_timer += us;
+	w->master_timer += us;	// DEBUG clock
 	w->index_encounter_timer += us;
+	// only increment index pulse timer if index pulse is high (1)
+	if(w->index_pulse) {w->index_pulse_timer += us;}
+	handleIndexPulse(w);
+
 	handleHLTTimer(w, us);
 	// Type I status bit 5 (S5) will be set if HLD and HLT pins are high
 	if(w->currentCommandType == 1 && w->HLD_pin && w->HLT_pin) {
 		w->statusRegister |= 0b00100000;
 	}
-	// only increment index pulse timer if index pulse is high (1)
-	if(w->index_pulse) {w->index_pulse_timer += us;}
-	// check index pulse encountered
-	handleIndexPulse(w);
 	// check if command is still active and do command step if so...
 	if(!w->command_done) {
-		// do command step
 		commandStep(w, us);
 	}
 	// HLD pin will reset if drive is not busy and 15 index pulses happen
@@ -153,7 +190,7 @@ void doJWD1797Command(JWD1797* w) {
 	// if not TYPE IV (forced interrupt), get busy status bit from status register (bit 0)
 	int busy = w->statusRegister & 1;
 	// check busy status
-	if(busy) {printBusyMsg(); return;}
+	if(busy) {printBusyMsg(); return;}	// do not run command if busy
 
 	/* determine if command in command register is a TYPE I command by checking
 		if the 7 bit is a zero (noly TYPE I commands have a zero (0) in the 7 bit) */
@@ -195,41 +232,86 @@ void doJWD1797Command(JWD1797* w) {
 	}
 }
 
-// execute command step
+// execute command step if a command is active (not done)
 // us is the time that passed since the last CPU instruction
-int commandStep(JWD1797* w, double us) {
+void commandStep(JWD1797* w, double us) {
 	/* do what needs to be done based on which command is still active and based
 		on certain timer */
-		if(w->currentCommandType == 1 && w->step_timer >= (w->stepRate*1000)) {
+  if(w->currentCommandName == "RESTORE") {
 
-		}
-		if(w->currentCommandName == "RESTORE") {
-			//...do restore stuff
+		// do command action step if not complete
+		if(!w->command_action_done) {
+			// check track and set not_track00_pin accordingly
+			if(w->current_track == 0) {w->not_track00_pin = 0;}
+			else {w->not_track00_pin = 1;}
+
 			// check TR00 pin
 			if(!w->not_track00_pin) {	// indicates r/w head is over track 00
 				w->trackRegister = 0;
-				// **** generate interrupt ****
+				// generate interrupt
 				w->intrq = 1;
+				// e8259_set_irq0 (e8259_slave, 1);
+				w->command_action_done = 1;	// indicate end of command action
+				printf("%s\n", "RESTORED HEAD TO TRACK 00 - command action DONE");
+				return;
 			}
-			else {	// r/w head is not over track 00
+			// not at track 00 - increment step timer
+			else {
+				w->step_timer += us;
+				// check step timer - has it completed one step according to the step rate?
+				if(w->step_timer >= (w->stepRate*1000)) {
+					w->current_track--;
+					// reset step timer
+					w->step_timer = 0.0;
+				}
+			}
+		}
 
-			}
-			// after all steps are done... reached track 00
+		/* after all steps are done (reached track 00)
+		 	take care of post command varifications and delays */
+		else if(w->command_action_done) {
 			// take care of delayed HLD
 			if(w->delayed_HLD) {
 				w->HLT_timer_active = 1;
 				w->HLT_timer = 0.0;
 				w->HLD_pin = 1;
+				// one shot from HLD pin resets HLT pin
+				w->HLT_pin = 0;
 				w->HLD_idle_reset_timer = 0.0;
+
+				// reset delayed HLD flag
+				w->delayed_HLD = 0;
 			}
 
-			// if done - reset (clear) busy status bit and generate interrupt
-			w->command_done = 1;
-			w->statusRegister &= 0b11111110;
-			w->intrq = 1;
-			// ****** send signal to slave I0 on 8259 here ********
-
+			// if no verify
+			if(!w->verifyFlag) {
+				// command is done
+				w->command_done = 1;
+				w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+				w->intrq = 1;	// and generate interrupt
+				// e8259_set_irq0 (e8259_slave, 1);
+				return;
+			}
+			// still waiting on verify head settling...
+			if(w->verifyFlag && !w->head_settling_done) {
+				w->verify_head_settling_timer =+ us;
+				// check if verify head settling is timed out
+				if(w->verify_head_settling_timer >= VERIFY_HEAD_SETTLING_LIMIT) {
+					// reset timer
+					w->verify_head_settling_timer = 0.0;
+					w->head_settling_done = 1;
+				}
+			}
+			// headsettling is done, now check if HLT pin is high
+			// check if read/write head is ready to read for verification operation
+			if(w->head_settling_done && w->HLT_pin) {
+				w->command_done = 1;
+				w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+				w->intrq = 1;	// and generate interrupt
+				// e8259_set_irq0 (e8259_slave, 1);
+			}
 		}
+	}
 }
 
 
@@ -242,36 +324,44 @@ int commandStep(JWD1797* w, double us) {
 void setupTypeICommand(JWD1797* w) {
 	// printf("TYPE I Command in WD1797 command register..\n");
 	w->currentCommandType = 1;
+	w->command_action_done = 0;
 	w->command_done = 0;
+	w->head_settling_done = 0;
 	// set appropriate status bits for type I command
 	typeIStatusReset(w);
-	// establish step rate options for 1MHz clock (only used with TYPE I cmds)
+	// establish step rate options (in ms) for 1MHz clock (only used with TYPE I cmds)
 	int rates[] = {6, 12, 20, 30};
-	// get rate bit
+	// get rate bits
 	int rateBits = w->commandRegister & 3;
 	// set flags according to command bits
 	w->stepRate = rates[rateBits];
 	w->verifyFlag = (w->commandRegister>>2) & 1;
 	w->headLoadFlag = (w->commandRegister>>3) & 1;
 	// HLD set according to V and h flags of type I command
-	if(!w->headLoadFlag && !w->verifyFlag) {w->HLD_pin = 0; w->HLT_pin = 0;}
+	if(!w->headLoadFlag && !w->verifyFlag) {w->HLD_pin = 0;}
 	else if(w->headLoadFlag && !w->verifyFlag && w->HLD_pin == 0) {
-		//w->HLT_timer_active = 1;
-		//w->HLT_timer = 0.0;
+		w->HLT_timer_active = 1;
+		w->HLT_timer = 0.0;
 		w->HLD_pin = 1;
+		// one shot from HLD pin resets HLT pin
+		w->HLT_pin = 0;
 		w->HLD_idle_reset_timer = 0.0;
+
 	}
 	else if(!w->headLoadFlag && w->verifyFlag && w->HLD_pin == 0) {w->delayed_HLD = 1;}
 	else if(w->headLoadFlag && w->verifyFlag && w->HLD_pin == 0) {
 		w->HLT_timer_active = 1;
 		w->HLT_timer = 0.0;
 		w->HLD_pin = 1;
+		// one shot from HLD pin resets HLT pin
+		w->HLT_pin = 0;
 		w->HLD_idle_reset_timer = 0.0;
+
 	}
 	// initialize command type I timer
-	w->command_typeI_timer = 0.0;
+	// w->command_typeI_timer = 0.0;
 	// add appropriate time based on V flag (1 MHz clock) 30,000 us
-	if(w->verifyFlag) {w->command_typeI_timer += 30*1000;}
+	// if(w->verifyFlag) {w->command_typeI_timer += 30*1000;}
 }
 
 void setupTypeIICommand(JWD1797* w) {
@@ -554,6 +644,10 @@ void handleHLDIdle(JWD1797* w, double time) {
 			w->HLD_pin = 0;
 			w->HLD_idle_reset_timer = 0.0;
 		}
+	}
+	// if busy, make sure timer starts at 0.0 for start of next IDLE TIME count
+	else if(busy) {
+		w->HLD_idle_reset_timer = 0.0;
 	}
 }
 

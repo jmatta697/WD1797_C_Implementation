@@ -56,7 +56,10 @@ int interruptRtoNR;
 int interruptIndexPulse;
 int interruptImmediate;
 
-int command_done;
+int command_action_done;  // flag indicates if the command action is done
+int command_done; // flag indicating that entire command is done -
+                  // including verification and delay -
+int head_settling_done;
 int terminate_command;
 
 // TESTING
@@ -66,7 +69,7 @@ double master_timer;
 double index_pulse_timer;
 double index_encounter_timer;
 double step_timer;
-double command_typeI_timer;
+double verify_head_settling_timer;
 double command_typeII_timer;
 double command_typeIII_timer;
 double command_typeIV_timer;
@@ -99,7 +102,6 @@ int intrq;  // attached to I0 of the slave 8259 interrupt controller in the Z-10
     register or by loading the command register with a new command. It is also
     set when a forced interrupt condition is met. */
 
-//
 int current_track;
 
 
@@ -112,7 +114,7 @@ unsigned int readJWD1797(JWD1797*, unsigned int);
 void doJWD1797Cycle(JWD1797*, double);
 void doJWD1797Command(JWD1797*);
 
-int commandStep(JWD1797*, double);
+void commandStep(JWD1797*, double);
 void printAllRegisters(JWD1797*);
 void printCommandFlags(JWD1797*);
 void typeIStatusReset(JWD1797*);
