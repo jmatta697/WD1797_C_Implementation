@@ -58,8 +58,8 @@ void resetJWD1797(JWD1797* jwd_controller) {
 
 	jwd_controller->disk_img_index_pointer = 0;
 
-	jwd_controller->ready = 0;	// start drive not ready
-	jwd_controller->stepDirection = 0;	// start direction step out -> track 00
+	// jwd_controller->ready = 0;	// start drive not ready
+	// jwd_controller->stepDirection = 0;	// start direction step out -> track 00
 
 	jwd_controller->currentCommandName = "";
 	jwd_controller->currentCommandType = 0;
@@ -98,7 +98,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->HLD_idle_reset_timer = 0.0;
 	jwd_controller->HLT_timer = 0.0;
 
-	jwd_controller->index_pulse = 0;
+	jwd_controller->index_pulse_pin = 0;
 	jwd_controller->ready_pin = 0;
 	jwd_controller->tg43_pin = 0;
 	jwd_controller->HLD_pin = 0;
@@ -162,10 +162,10 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
   main program will add the amount of calculated time from the previous
 	instruction to the internal WD1797 timers */
 void doJWD1797Cycle(JWD1797* w, double us) {
-	w->master_timer += us;	// DEBUG clock
+	w->master_timer += us;	// @@@ DEBUG clock @@@
 	w->index_encounter_timer += us;
 	// only increment index pulse timer if index pulse is high (1)
-	if(w->index_pulse) {w->index_pulse_timer += us;}
+	if(w->index_pulse_pin) {w->index_pulse_timer += us;}
 	handleIndexPulse(w);
 
 	handleHLTTimer(w, us);
@@ -204,7 +204,7 @@ void doJWD1797Command(JWD1797* w) {
 	else if(((w->commandRegister>>5) & 7) < 6) {
 		printf("TYPE II Command in WD1797 command register..\n");
 		// sample READY input from DRIVE
-		if(!w->ready) {
+		if(!w->ready_pin) {
 			// ** generate interrupt **
 			w->intrq = 1; // MUST SEND INTERRUPT to slave int controller also...
 			return; // do not execute command
@@ -218,7 +218,7 @@ void doJWD1797Command(JWD1797* w) {
 	else if(((w->commandRegister>>5) & 7) > 5) {
 		printf("TYPE III Command in WD1797 command register..\n");
 		// sample READY input from DRIVE
-		if(!w->ready) {
+		if(!w->ready_pin) {
 			// ** generate interrupt **
 			w->intrq = 1; // MUST SEND INTERRUPT to slave int controller also...
 			return; // do not execute command
@@ -312,6 +312,8 @@ void commandStep(JWD1797* w, double us) {
 			}
 		}
 	}
+	// end RESTORE
+
 }
 
 
@@ -611,21 +613,21 @@ void printCommandFlags(JWD1797* w) {
 		printf("%s%d\n", "InterruptImmediate: ", w->interruptImmediate);
 	}
 	else {
-		printf("%s\n", "NO ACTIVE COMMAND!");
+		printf("%s\n", "INVALID COMMAND TYPE!");
 	}
 }
 
 void handleIndexPulse(JWD1797* w) {
-	if(!w->index_pulse && w->index_encounter_timer >= INDEX_HOLE_ENCOUNTER_US) {
-		w->index_pulse = 1;
+	if(!w->index_pulse_pin && w->index_encounter_timer >= INDEX_HOLE_ENCOUNTER_US) {
+		w->index_pulse_pin = 1;
 		// set IP status if TYPE I command is active
 		if(w->currentCommandType == 1) {w->statusRegister |= 0b00000010;}
 		// reset index hole encounter timer
 		w->index_encounter_timer = 0.0;
 	}
 	// check index pulse timer
-	if(w->index_pulse && w->index_pulse_timer >= INDEX_HOLE_PULSE_US) {
-		w->index_pulse = 0;
+	if(w->index_pulse_pin && w->index_pulse_timer >= INDEX_HOLE_PULSE_US) {
+		w->index_pulse_pin = 0;
 		// clear IP status if TYPE I command is active
 		if(w->currentCommandType == 1) {w->statusRegister &= 0b11111101;}
 		// reset index pulse timer

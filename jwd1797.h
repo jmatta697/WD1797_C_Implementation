@@ -26,9 +26,9 @@ unsigned char CRCRegister;
 // keep track of current byte being pointed to by the READ/WRITE head
 int disk_img_index_pointer;
 // ready input from disk drive interface (0 = not ready, 1 = ready)
-int ready;
+// int ready;
 // step direction output to disk drive interface (0 = out->track00, 1 = in->track39)
-int stepDirection;
+// int stepDirection;
 // step pulse output to disk drive interface (MFM - 2 microseconds, FM - 4)
 // int stepPulse;
 
@@ -77,14 +77,14 @@ double HLD_idle_reset_timer;
 double HLT_timer;
 
 // DRIVE pins
-int index_pulse;
+int index_pulse_pin;
 int ready_pin;
 int tg43_pin;
 int HLD_pin;
 int HLT_pin;
 int not_track00_pin;
 int direction_pin;
-// int test_not_pin;
+// int not_test_pin;
 
 int delayed_HLD;
 int HLT_timer_active;
