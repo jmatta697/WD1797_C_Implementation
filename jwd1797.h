@@ -127,6 +127,6 @@ void setupTypeIIICommand(JWD1797*);
 void setTypeIIICommand(JWD1797*);
 void printBusyMsg();
 void updateTG43Signal(JWD1797*);
-void handleIndexPulse(JWD1797*);
+void handleIndexPulse(JWD1797*, double);
 void handleHLDIdle(JWD1797*, double);
 void handleHLTTimer(JWD1797*, double);

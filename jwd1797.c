@@ -27,7 +27,7 @@
 // when non-busy status and HLD high, reset HLD after 15 index pulses
 #define HLD_IDLE_RESET_LIMIT 15*INDEX_HOLE_ENCOUNTER_US
 // head load timing (this can be set from 30-100 ms, depending on drive)
-#define HEAD_LOAD_TIMING_LIMIT 65*1000	// set to 65 ms (65,000 us)
+#define HEAD_LOAD_TIMING_LIMIT 60*1000	// set to 60 ms (60,000 us)
 // verify time is 30 milliseconds for a 1MHz clock
 #define VERIFY_HEAD_SETTLING_LIMIT 30*1000
 
@@ -121,7 +121,36 @@ void resetJWD1797(JWD1797* jwd_controller) {
 
 // read data from wd1797 according to port
 unsigned int readJWD1797(JWD1797* jwd_controller, unsigned int port_addr) {
+	// printf("\nRead ");
+	// printf("%s%X\n\n", " from wd1797/port: ", port_addr);
 
+	unsigned int r_val = 0;
+
+	switch(port_addr) {
+		// status reg port
+		case 0xb0:
+			r_val = jwd_controller->statusRegister;
+			break;
+		// track reg port
+		case 0xb1:
+			r_val = jwd_controller->trackRegister;
+			break;
+		// sector reg port
+		case 0xb2:
+			break;
+		// data reg port
+		case 0xb3:
+			break;
+		// control latch reg port (write)
+		case 0xb4:
+			printf(" ** NOTICE: Reading from WD1797 control latch port 0xB4 (write only)!\n");
+			break;
+		// controller status port (read)
+		case 0xb5:
+			break;
+		default:
+			printf("%X is an invalid port!\n", port_addr);
+	}
 }
 
 // write data to wd1797 based on port address
@@ -152,6 +181,10 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 		// control latch port
 		case 0xb4:
 			break;
+		// controller status port
+		case 0xb5:
+			printf(" ** NOTICE: Writing to WD1797 status port 0xB5 (read only)!\n");
+			break;
 		default:
 			printf("%X is an invalid port!\n", port_addr);
 	}
@@ -163,16 +196,28 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 	instruction to the internal WD1797 timers */
 void doJWD1797Cycle(JWD1797* w, double us) {
 	w->master_timer += us;	// @@@ DEBUG clock @@@
-	w->index_encounter_timer += us;
-	// only increment index pulse timer if index pulse is high (1)
-	if(w->index_pulse_pin) {w->index_pulse_timer += us;}
-	handleIndexPulse(w);
+
+	// update not_track00_pin
+	// check track and set not_track00_pin accordingly
+	if(w->current_track == 0) {w->not_track00_pin = 0;}
+	else {w->not_track00_pin = 1;}
+	// update type I status bit 2 (S2) for track 00 status
+	if(w->currentCommandType == 1 && !w->not_track00_pin) {
+		w->statusRegister |= 0b00000100;
+	}
+	// clear TYPE I status bit 2 (S2) if not on track 00
+	else {w->statusRegister &= 0b11111011;}
+
+	handleIndexPulse(w, us);
 
 	handleHLTTimer(w, us);
 	// Type I status bit 5 (S5) will be set if HLD and HLT pins are high
 	if(w->currentCommandType == 1 && w->HLD_pin && w->HLT_pin) {
 		w->statusRegister |= 0b00100000;
 	}
+	// clear TYPE I status bit 5 (S5) if HLD and HLT both not high
+	else {w->statusRegister &= 0b11011111;}
+
 	// check if command is still active and do command step if so...
 	if(!w->command_done) {
 		commandStep(w, us);
@@ -236,16 +281,12 @@ void doJWD1797Command(JWD1797* w) {
 // us is the time that passed since the last CPU instruction
 void commandStep(JWD1797* w, double us) {
 	/* do what needs to be done based on which command is still active and based
-		on certain timer */
+		on the timers */
+
   if(w->currentCommandName == "RESTORE") {
-
-		// do command action step if not complete
+		// do "command action" step if not complete
 		if(!w->command_action_done) {
-			// check track and set not_track00_pin accordingly
-			if(w->current_track == 0) {w->not_track00_pin = 0;}
-			else {w->not_track00_pin = 1;}
-
-			// check TR00 pin
+			// check TR00 pin (this pin is updated in doJWD1797Cycle)
 			if(!w->not_track00_pin) {	// indicates r/w head is over track 00
 				w->trackRegister = 0;
 				// generate interrupt
@@ -258,7 +299,9 @@ void commandStep(JWD1797* w, double us) {
 			// not at track 00 - increment step timer
 			else {
 				w->step_timer += us;
-				// check step timer - has it completed one step according to the step rate?
+				/* check step timer - has it completed one step according to the step rate?
+					Step rates are in milliseconds (ms), so step rate must be multipled by 1000
+					to change it to microseconds (us). */
 				if(w->step_timer >= (w->stepRate*1000)) {
 					w->current_track--;
 					// reset step timer
@@ -271,44 +314,52 @@ void commandStep(JWD1797* w, double us) {
 		 	take care of post command varifications and delays */
 		else if(w->command_action_done) {
 			// take care of delayed HLD
-			if(w->delayed_HLD) {
+			if(w->delayed_HLD && w->HLD_pin == 0) {
 				w->HLT_timer_active = 1;
 				w->HLT_timer = 0.0;
 				w->HLD_pin = 1;
 				// one shot from HLD pin resets HLT pin
 				w->HLT_pin = 0;
 				w->HLD_idle_reset_timer = 0.0;
-
 				// reset delayed HLD flag
 				w->delayed_HLD = 0;
 			}
 
-			// if no verify
-			if(!w->verifyFlag) {
-				// command is done
+			// if NO headload or yes headload and no verify
+			if((!w->headLoadFlag || w->headLoadFlag) && !w->verifyFlag) {
+				// no 30 ms delay and HLT is not sampled - command is done
 				w->command_done = 1;
 				w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
-				w->intrq = 1;	// and generate interrupt
-				// e8259_set_irq0 (e8259_slave, 1);
+				// no interrupt is generated because no verification operation takes place
 				return;
 			}
 			// still waiting on verify head settling...
-			if(w->verifyFlag && !w->head_settling_done) {
-				w->verify_head_settling_timer =+ us;
-				// check if verify head settling is timed out
-				if(w->verify_head_settling_timer >= VERIFY_HEAD_SETTLING_LIMIT) {
-					// reset timer
-					w->verify_head_settling_timer = 0.0;
-					w->head_settling_done = 1;
+			else if((!w->headLoadFlag || w->headLoadFlag) && w->verifyFlag) {
+				// if verify head settling has not occurred yet...
+				if(!w->head_settling_done) {
+					w->verify_head_settling_timer += us;
+					// check if verify head settling is timed out
+					if(w->verify_head_settling_timer >= VERIFY_HEAD_SETTLING_LIMIT) {
+						// reset timer
+						w->verify_head_settling_timer = 0.0;
+						w->head_settling_done = 1;
+						// assume verification operation is successful - generate interrupt
+						w->intrq = 1;
+						// e8259_set_irq0 (e8259_slave, 1);
+					}
 				}
-			}
-			// headsettling is done, now check if HLT pin is high
-			// check if read/write head is ready to read for verification operation
-			if(w->head_settling_done && w->HLT_pin) {
-				w->command_done = 1;
-				w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
-				w->intrq = 1;	// and generate interrupt
-				// e8259_set_irq0 (e8259_slave, 1);
+				// head settling time is done. wait for HLT pin to go high...
+				else if(w->head_settling_done) {
+					// is HLT pin high?
+					if(w->HLT_pin) {
+						// head settling time has passed and the HLT pin is high
+						// command is done
+						w->command_done = 1;
+						w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+						return;
+					}
+				}
+
 			}
 		}
 	}
@@ -350,7 +401,7 @@ void setupTypeICommand(JWD1797* w) {
 		w->HLD_idle_reset_timer = 0.0;
 
 	}
-	else if(!w->headLoadFlag && w->verifyFlag && w->HLD_pin == 0) {w->delayed_HLD = 1;}
+	else if(!w->headLoadFlag && w->verifyFlag) {w->delayed_HLD = 1;}
 	else if(w->headLoadFlag && w->verifyFlag && w->HLD_pin == 0) {
 		w->HLT_timer_active = 1;
 		w->HLT_timer = 0.0;
@@ -617,7 +668,11 @@ void printCommandFlags(JWD1797* w) {
 	}
 }
 
-void handleIndexPulse(JWD1797* w) {
+void handleIndexPulse(JWD1797* w, double time) {
+	w->index_encounter_timer += time;
+	// only increment index pulse timer if index pulse is high (1)
+	if(w->index_pulse_pin) {w->index_pulse_timer += time;}
+
 	if(!w->index_pulse_pin && w->index_encounter_timer >= INDEX_HOLE_ENCOUNTER_US) {
 		w->index_pulse_pin = 1;
 		// set IP status if TYPE I command is active
@@ -662,6 +717,7 @@ void handleHLTTimer(JWD1797* w, double time) {
 			w->HLT_pin = 1;
 			// reset timer
 			w->HLT_timer = 0.0;
+			w->HLT_timer_active = 0;
 		}
 	}
 }

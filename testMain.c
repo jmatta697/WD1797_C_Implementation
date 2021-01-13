@@ -26,14 +26,14 @@ int main(int argc, char* argv[]) {
 
   /* tests that the WD1797 is receiving and processing incoming instruction
     timings by using a master clock only for testing */
-  masterClockTest(jwd1797, instruction_times);
+  // masterClockTest(jwd1797, instruction_times);
   // test that the WD1797 is properly recognizing commands
-  commandWriteTests(jwd1797);
+  // commandWriteTests(jwd1797);
   /* tests that the index hole pulse is being properly registered by the status
     register when a TYPE I command is being executed */
-  indexPulseTest(jwd1797, instruction_times);
+  // indexPulseTest(jwd1797, instruction_times);
   // restore command test
-  // ** CALL RESTORE instruction TEST HERE **
+  restoreCommandTest(jwd1797, instruction_times);
 
 
   return 0;
