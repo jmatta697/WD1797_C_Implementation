@@ -33,7 +33,9 @@ int main(int argc, char* argv[]) {
     register when a TYPE I command is being executed */
   // indexPulseTest(jwd1797, instruction_times);
   // restore command test
-  restoreCommandTest(jwd1797, instruction_times);
+  // restoreCommandTest(jwd1797, instruction_times);
+  // SEEK command test
+  seekCommandTest(jwd1797, instruction_times);
 
 
   return 0;

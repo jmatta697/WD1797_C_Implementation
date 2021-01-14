@@ -7,6 +7,7 @@
 #include "utility_functions.h"
 
 void restoreTestPrintHelper(JWD1797*);
+void seekTestPrintHelper(JWD1797*);
 
 /* ------------- TEST FUNCTIONS ---------------- */
 
@@ -183,7 +184,6 @@ void indexPulseTest(JWD1797* jwd1797, double instr_times[]) {
 }
 
 void restoreCommandTest(JWD1797* jwd1797, double instr_times[]) {
-  // index hole test
   printf("\n\n%s\n", "-------------- RESTORE COMMAND TEST --------------");
 
   resetJWD1797(jwd1797);
@@ -317,6 +317,126 @@ void restoreTestPrintHelper(JWD1797* jwd1797) {
   printf("%d\n", jwd1797->current_track);
   printf("%s", "TRACK REGISTER: ");
   print_bin8_representation(readJWD1797(jwd1797, 0xB1));
+  printf("%s\n", "");
+  printf("%s", "TYPE I STATUS REGISTER: ");
+  print_bin8_representation(readJWD1797(jwd1797, 0xB0));
+  printf("%s\n", "");
+  printf("%s\n", "");
+}
+
+void seekCommandTest(JWD1797* jwd1797, double instr_times[]) {
+  /* SEEK command assumes the target track is in the data register. Also, the
+    track register is updated */
+  printf("\n\n%s\n", "-------------- SEEK COMMAND TEST --------------");
+
+  printf("%s\n\n", "------- SEEK from track 5 -> 2: h=0, V=0 -------");
+  // try to seek track 2 from current track 5
+  resetJWD1797(jwd1797);
+  jwd1797->current_track = 5;
+  writeJWD1797(jwd1797, 0xB3, 0b00000010);  // write 2 to data register
+  // issue SEEK command - no headlaod (60 ms), no verify (30 ms), 30 ms step rate
+  writeJWD1797(jwd1797, 0xB0, 0b00010011);
+
+  for(int i = 0; i < 500000; i++) {
+    // printf("%s\n", "loop");
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+
+    if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
+      (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
+      (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015)) {
+        sleep(1); // delay loop iteration for observation
+        seekTestPrintHelper(jwd1797);
+    }
+  }
+
+  printf("%s\n\n", "------- SEEK from track 2 -> 5: h=0, V=0 -------");
+  // try to seek track 5 from current track 2
+  resetJWD1797(jwd1797);
+  jwd1797->current_track = 2;
+  writeJWD1797(jwd1797, 0xB3, 0b00000101);  // write 5 to data register
+  // issue SEEK command - no headlaod (60 ms), no verify (30 ms), 30 ms step rate
+  writeJWD1797(jwd1797, 0xB0, 0b00010011);
+
+  for(int i = 0; i < 500000; i++) {
+    // printf("%s\n", "loop");
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+
+    if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
+      (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
+      (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015)) {
+        sleep(1); // delay loop iteration for observation
+        seekTestPrintHelper(jwd1797);
+    }
+  }
+
+  printf("%s\n\n", "------- SEEK from track 3 -> 0: h=0, V=0 -------");
+  // try to seek track 0 from current track 3
+  resetJWD1797(jwd1797);
+  jwd1797->current_track = 3;
+  writeJWD1797(jwd1797, 0xB3, 0b00000000);  // write 0 to data register
+  // issue SEEK command - no headlaod (60 ms), no verify (30 ms), 30 ms step rate
+  writeJWD1797(jwd1797, 0xB0, 0b00010011);
+
+  for(int i = 0; i < 500000; i++) {
+    // printf("%s\n", "loop");
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+
+    if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
+      (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
+      (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015)) {
+        sleep(1); // delay loop iteration for observation
+        seekTestPrintHelper(jwd1797);
+    }
+  }
+
+  printf("%s\n\n", "------- SEEK from track 3 -> 0: h=1, V=1 -------");
+  // try to seek track 0 from current track 3
+  resetJWD1797(jwd1797);
+  jwd1797->current_track = 3;
+  writeJWD1797(jwd1797, 0xB3, 0b00000000);  // write 0 to data register
+  // issue SEEK command - no headlaod (60 ms), no verify (30 ms), 30 ms step rate
+  writeJWD1797(jwd1797, 0xB0, 0b00011111);
+
+  for(int i = 0; i < 500000; i++) {
+    // printf("%s\n", "loop");
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+
+    if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
+      (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
+      (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015) ||
+      (jwd1797->master_timer >= 119990 && jwd1797->master_timer <= 120015)) {
+        sleep(1); // delay loop iteration for observation
+        seekTestPrintHelper(jwd1797);
+    }
+  }
+}
+
+void seekTestPrintHelper(JWD1797* jwd1797) {
+  printf("%s", "MASTER CLOCK: ");
+  printf("%f\n", jwd1797->master_timer);
+  printf("%s", "V HEAD SETTLING TIMER: ");
+  printf("%f\n", jwd1797->verify_head_settling_timer);
+  printf("%s", "HLT TIMER: ");
+  printf("%f\n", jwd1797->HLT_timer);
+  printf("%s", "CURRENT TRACK: ");
+  printf("%d\n", jwd1797->current_track);
+  printf("%s", "TRACK REGISTER: ");
+  print_bin8_representation(readJWD1797(jwd1797, 0xB1));
+  printf("%s\n", "");
+  printf("%s", "DATA REGISTER: ");
+  print_bin8_representation(readJWD1797(jwd1797, 0xB3));
   printf("%s\n", "");
   printf("%s", "TYPE I STATUS REGISTER: ");
   print_bin8_representation(readJWD1797(jwd1797, 0xB0));
