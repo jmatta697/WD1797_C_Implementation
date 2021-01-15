@@ -293,9 +293,6 @@ void commandStep(JWD1797* w, double us) {
 				// check TR00 pin (this pin is updated in doJWD1797Cycle)
 				if(!w->not_track00_pin) {	// indicates r/w head is over track 00
 					w->trackRegister = 0;
-					// generate interrupt
-					w->intrq = 1;
-					// e8259_set_irq0 (e8259_slave, 1);
 					w->command_action_done = 1;	// indicate end of command action
 					printf("%s\n", "RESTORED HEAD TO TRACK 00 - command action DONE");
 					return;
@@ -307,6 +304,7 @@ void commandStep(JWD1797* w, double us) {
 						Step rates are in milliseconds (ms), so step rate must be multipled by 1000
 						to change it to microseconds (us). */
 					if(w->step_timer >= (w->stepRate*1000)) {
+						w->direction_pin = 0;
 						w->current_track--;
 						// reset step timer
 						w->step_timer = 0.0;
@@ -318,9 +316,6 @@ void commandStep(JWD1797* w, double us) {
 				/* check if track register == data register (SEEK command assumes that
 					the data register contains the target track) */
 				if(w->trackRegister == w->dataRegister) {	// SEEK found the target track
-					// generate interrupt
-					w->intrq = 1;
-					// e8259_set_irq0 (e8259_slave, 1);
 					w->command_action_done = 1;	// indicate end of command action
 					printf("%s\n", "SEEK found target track - command action DONE");
 					return;
@@ -328,6 +323,7 @@ void commandStep(JWD1797* w, double us) {
 				else if(w->trackRegister > w->dataRegister) {	// must step out
 					w->step_timer += us;
 					if(w->step_timer >= (w->stepRate*1000)) {
+						w->direction_pin = 0;
 						w->current_track--;
 						// update track register with current track
 						w->trackRegister = w->current_track;
@@ -338,6 +334,7 @@ void commandStep(JWD1797* w, double us) {
 				else if(w->trackRegister < w->dataRegister) {	// must step in
 					w->step_timer += us;
 					if(w->step_timer >= (w->stepRate*1000)) {
+						w->direction_pin = 1;
 						w->current_track++;
 						// update track register with current track
 						w->trackRegister = w->current_track;
@@ -347,7 +344,84 @@ void commandStep(JWD1797* w, double us) {
 				}
 			}	// END SEEK
 
+			else if(w->currentCommandName == "STEP") {
+				/* check if direction is step out with track already at TRACK 00
+					(can not go to -1 track) */
+				if(w->not_track00_pin == 0 && w->direction_pin == 0) {
+					// update track register to 0 regardless of track update flag
+					w->trackRegister = 0;
+					w->command_action_done = 1;	// indicate end of command action
+					printf("%s\n", "STEP - command action DONE");
+					return;
+				}
+				else {
+					w->step_timer += us;
+					/* check step timer - has it completed one step according to the step rate?
+						Step rates are in milliseconds (ms), so step rate must be multipled by 1000
+						to change it to microseconds (us). */
+					if(w->step_timer >= (w->stepRate*1000)) {
+						// step track according to direction_pin
+						if(w->direction_pin == 0) {w->current_track--;}
+						else if(w->direction_pin == 1) {w->current_track++;}
+						// update track register if track update flag is high
+						if(w->trackUpdateFlag) {w->trackRegister = w->current_track;}
+						// reset step timer
+						w->step_timer = 0.0;
+						w->command_action_done = 1;	// indicate end of command action
+						printf("%s\n", "STEP - command action DONE");
+						return;
+					}
+				}
+			}	// END STEP
+
+			else if(w->currentCommandName == "STEP-IN") {
+				w->step_timer += us;
+				/* check step timer - has it completed one step according to the step rate?
+					Step rates are in milliseconds (ms), so step rate must be multipled by 1000
+					to change it to microseconds (us). */
+				if(w->step_timer >= (w->stepRate*1000)) {
+					// step track according to direction_pin
+					w->current_track++;
+					// update track register if track update flag is high
+					if(w->trackUpdateFlag) {w->trackRegister = w->current_track;}
+					// reset step timer
+					w->step_timer = 0.0;
+					w->command_action_done = 1;	// indicate end of command action
+					printf("%s\n", "STEP - command action DONE");
+					return;
+				}
+			}
+
+			else if(w->currentCommandName == "STEP-OUT") {
+				if(w->not_track00_pin == 0 && w->direction_pin == 0) {
+					// update track register to 0 regardless of track update flag
+					w->trackRegister = 0;
+					w->command_action_done = 1;	// indicate end of command action
+					printf("%s\n", "STEP - command action DONE");
+					return;
+				}
+				else {
+					w->step_timer += us;
+					/* check step timer - has it completed one step according to the step rate?
+						Step rates are in milliseconds (ms), so step rate must be multipled by 1000
+						to change it to microseconds (us). */
+					if(w->step_timer >= (w->stepRate*1000)) {
+						// step track according to direction_pin
+						w->current_track--;
+						// update track register if track update flag is high
+						if(w->trackUpdateFlag) {w->trackRegister = w->current_track;}
+						// reset step timer
+						w->step_timer = 0.0;
+						w->command_action_done = 1;	// indicate end of command action
+						printf("%s\n", "STEP - command action DONE");
+						return;
+					}
+				}
+			} // END STEP-OUT
+
 		}	// END command action section
+
+		// ----------------------------------------------------
 
 		/* after all steps are done (reached track 00 in the case of RESTORE)
 			take care of post command varifications and delays */
@@ -369,7 +443,10 @@ void commandStep(JWD1797* w, double us) {
 				// no 30 ms delay and HLT is not sampled - command is done
 				w->command_done = 1;
 				w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
-				// no interrupt is generated because no verification operation takes place
+				w->HLD_idle_reset_timer = 0.0;
+				// generate interrupt
+				w->intrq = 1;
+				// e8259_set_irq0 (e8259_slave, 1);
 				return;
 			}
 			// still waiting on verify head settling...
@@ -384,7 +461,7 @@ void commandStep(JWD1797* w, double us) {
 						w->head_settling_done = 1;
 					}
 				}
-				// head settling time is done. wait for HLT pin to go high...
+				// head settling time is done. Wait for HLT pin to go high if not already.
 				else if(w->head_settling_done) {
 					// is HLT pin high?
 					if(w->HLT_pin) {
@@ -392,11 +469,11 @@ void commandStep(JWD1797* w, double us) {
 						// command is done
 						w->command_done = 1;
 						w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+						w->HLD_idle_reset_timer = 0.0;
 						// assume verification operation is successful - generate interrupt
 						w->intrq = 1;
 						// e8259_set_irq0 (e8259_slave, 1);
 						// reset HLD idle timer
-						w->HLD_idle_reset_timer = 0.0;
 						return;
 					}
 				}
@@ -420,6 +497,7 @@ void setupTypeICommand(JWD1797* w) {
 	w->command_action_done = 0;
 	w->command_done = 0;
 	w->head_settling_done = 0;
+	w->step_timer = 0.0;
 	// set appropriate status bits for type I command to start
 	typeIStatusReset(w);
 	// establish step rate options (in ms) for 1MHz clock (only used with TYPE I cmds)
@@ -561,10 +639,12 @@ void setTypeICommand(JWD1797* w) {
 		}
 		else if(cmdID == 2) {	//STEP-IN
 			w->currentCommandName = "STEP-IN";
+			w->direction_pin = 1;
 			printf("%s command in WD1797 command register\n", w->currentCommandName);
 		}
 		else if(cmdID == 3)  {	// STEP-OUT
 			w->currentCommandName = "STEP-OUT";
+			w->direction_pin = 0;
 			printf("%s command in WD1797 command register\n", w->currentCommandName);
 		}
 		// check error

@@ -35,7 +35,12 @@ int main(int argc, char* argv[]) {
   // restore command test
   // restoreCommandTest(jwd1797, instruction_times);
   // SEEK command test
-  seekCommandTest(jwd1797, instruction_times);
+  // seekCommandTest(jwd1797, instruction_times);
+  // STEP command test
+
+  // STEP-IN command test
+
+  // STEP-OUT command test
 
 
   return 0;
