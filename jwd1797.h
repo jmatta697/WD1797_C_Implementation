@@ -60,6 +60,7 @@ int command_action_done;  // flag indicates if the command action is done
 int command_done; // flag indicating that entire command is done -
                   // including verification and delay -
 int head_settling_done;
+int e_delay_done;
 int terminate_command;
 
 // TESTING
@@ -70,6 +71,7 @@ double index_pulse_timer;
 double index_encounter_timer;
 double step_timer;
 double verify_head_settling_timer;
+double e_delay_timer;
 double command_typeII_timer;
 double command_typeIII_timer;
 double command_typeIV_timer;
@@ -84,6 +86,7 @@ int HLD_pin;
 int HLT_pin;
 int not_track00_pin;
 int direction_pin;
+int sso_pin;
 // int not_test_pin;
 
 int delayed_HLD;

@@ -30,6 +30,8 @@
 #define HEAD_LOAD_TIMING_LIMIT 60*1000	// set to 60 ms (60,000 us)
 // verify time is 30 milliseconds for a 1MHz clock
 #define VERIFY_HEAD_SETTLING_LIMIT 30*1000
+// E (15 ms delay) for TYPE II and III commands
+#define E_DELAY_LIMIT 15*1000
 
 // extern e8259_t* e8259_slave;
 
@@ -84,6 +86,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->command_action_done = 0;
 	jwd_controller->command_done = 0;
 	jwd_controller->head_settling_done = 0;
+	jwd_controller->e_delay_done = 0;
 
 	jwd_controller->terminate_command = 0;
 
@@ -92,6 +95,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->index_encounter_timer = 0.0;
 	jwd_controller->step_timer = 0.0;
 	jwd_controller->verify_head_settling_timer = 0.0;
+	jwd_controller->e_delay_timer = 0.0;
 	jwd_controller->command_typeII_timer = 0.0;
 	jwd_controller->command_typeIII_timer = 0.0;
 	jwd_controller->command_typeIV_timer = 0.0;
@@ -247,7 +251,9 @@ void doJWD1797Command(JWD1797* w) {
 	}
 	/* Determine if command in command register is TYPE II
 		 by checking the highest 3 bits. The two TYPE II commands have either 0b100
-		 (Read Sector) or 0b101 (Write Sector) as the high 3 bits */
+		 (Read Sector) or 0b101 (Write Sector) as the high 3 bits
+		 **NOTE: TYPE II commands assume that the target sector has been previously
+		 loaded into the sector register */
 	else if(((w->commandRegister>>5) & 7) < 6) {
 		printf("TYPE II Command in WD1797 command register..\n");
 		// sample READY input from DRIVE
@@ -482,6 +488,26 @@ void commandStep(JWD1797* w, double us) {
 
 	}	// END TYPE I command
 
+	else if(w->currentCommandType == 2) {
+		// do delay if E set
+		if(w->e_delay_done == 0 && w->delay15ms) {
+			// clock the e delay timer
+			w->e_delay_timer += us;
+			// check if E delay timer has reached limit
+			if(w->e_delay_timer >= E_DELAY_LIMIT) {
+				w->e_delay_done = 1;
+				w->e_delay_timer = 0.0;
+			}
+			return;	// delay still in progess - do not continue with command
+		}
+		// sample HLT pin - do not continue with command if HLT pin had not engaged
+		if(w->HLT_pin == 0) {return;}
+		updateTG43Signal(w);
+
+
+
+	}
+
 }	// END general command step
 
 
@@ -539,21 +565,40 @@ void setupTypeICommand(JWD1797* w) {
 void setupTypeIICommand(JWD1797* w) {
 	w->currentCommandType = 2;
 	w->command_done = 0;
+	w->e_delay_done = 0;
+	// reset DRQ line
+	w->drq = 0;
+	// reset INT request line
+	w->intrq = 0;
+	// e8259_set_irq0 (e8259_slave, 0);
 	// set busy status
 	w->statusRegister |= 1;
+	// reset drq/lost data/record not found/bits 5, 6 in status register
+	w->statusRegister &= 0b10001001;
+
 	/* set TYPE II flags */
 	w->updateSSO = (w->commandRegister>>1) & 1;
 	w->delay15ms = (w->commandRegister>>2) & 1;
 	w->swapSectorLength = (w->commandRegister>>3) & 1;
 	w->multipleRecords = (w->commandRegister>>4) & 1;
-	updateTG43Signal(w);
+
+	// update SSO (side select) line
+	if(w->currentCommandType == 2 || w->currentCommandType == 3) {
+		w->sso_pin = w->updateSSO? 1:0;
+	}
+
+	// set HLD pin
+	w->HLT_timer_active = 1;
+	w->HLT_timer = 0.0;
 	w->HLD_pin = 1;
-	// initialize HLD idle timer (set to 15 index pulses)
+	// one shot from HLD pin resets HLT pin
+	w->HLT_pin = 0;
 	w->HLD_idle_reset_timer = 0.0;
-	// initialize command type I timer
-	w->command_typeII_timer = 0.0;
+
+	w->e_delay_timer = 0.0;
+	// w->command_typeII_timer = 0.0;
 	// add appropriate time based on E flag 15,000 us
-	if(w->delay15ms) {w->command_typeII_timer += 15*1000;}
+	// if(w->delay15ms) {w->command_typeII_timer += 15*1000;}
 }
 
 void setupTypeIIICommand(JWD1797* w) {
