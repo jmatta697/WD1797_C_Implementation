@@ -32,10 +32,14 @@
 #define VERIFY_HEAD_SETTLING_LIMIT 30*1000
 // E (15 ms delay) for TYPE II and III commands
 #define E_DELAY_LIMIT 15*1000
+/* time limit for data shift register to assemble byte in data register
+	(simulated). This value is based on 'https://www.hp9845.net/9845/projects/fdio/#hp_formats'
+	where the 5.25" DS/DD disk is reported to have a 300 kbps data rate. */
+#define ASSEMBLE_DATA_BYTE_LIMIT 26.64
 
 // extern e8259_t* e8259_slave;
 
-FILE* disk_img;
+char* disk_content_array;
 
 JWD1797* newJWD1797() {
 	JWD1797* jwd_controller = (JWD1797*)malloc(sizeof(JWD1797));
@@ -87,6 +91,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->command_done = 0;
 	jwd_controller->head_settling_done = 0;
 	jwd_controller->e_delay_done = 0;
+	jwd_controller->start_byte_set = 0;
 
 	jwd_controller->terminate_command = 0;
 
@@ -96,6 +101,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->step_timer = 0.0;
 	jwd_controller->verify_head_settling_timer = 0.0;
 	jwd_controller->e_delay_timer = 0.0;
+	jwd_controller->assemble_data_byte_timer = 0.0;
 	jwd_controller->command_typeII_timer = 0.0;
 	jwd_controller->command_typeIII_timer = 0.0;
 	jwd_controller->command_typeIV_timer = 0.0;
@@ -109,6 +115,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->HLT_pin = 0;
 	jwd_controller->not_track00_pin = 0;
 	jwd_controller->direction_pin = 0;
+	jwd_controller->sso_pin = 0;
 	// jwd_controller-> test_not_pin;
 
 	jwd_controller->delayed_HLD = 0;
@@ -119,8 +126,12 @@ void resetJWD1797(JWD1797* jwd_controller) {
 
 	jwd_controller->current_track = 0;
 
-  // open current file "in" drive
-  disk_img = fopen("z-dos-1.img", "rb");
+	jwd_controller->disk_img_index_pointer = 0;
+	jwd_controller->start_byte = 0;
+
+	disk_content_array = diskImageToCharArray("z-dos-1.img", jwd_controller);
+	// TEST disk image to array function
+	// printByteArray(disk_content_array, 368640);
 }
 
 // read data from wd1797 according to port
@@ -141,14 +152,21 @@ unsigned int readJWD1797(JWD1797* jwd_controller, unsigned int port_addr) {
 			break;
 		// sector reg port
 		case 0xb2:
+			r_val = jwd_controller->sectorRegister;
 			break;
 		// data reg port
 		case 0xb3:
 			r_val = jwd_controller->dataRegister;
+			/* if there is a byte waiting to be read from the data register
+				(DRQ pin high) because of a READ operation */
+			if(jwd_controller->currentCommandType == 2 && jwd_controller->drq) {
+				jwd_controller->drq = 0; // reset data request line
+				jwd_controller->statusRegister &= 0b11111101; // reset S1 (data request bit)
+			}
 			break;
 		// control latch reg port (write)
 		case 0xb4:
-			printf(" ** NOTICE: Reading from WD1797 control latch port 0xB4 (write only)!\n");
+			printf(" ** WARNING: Reading from WD1797 control latch port 0xB4 (write only)!\n");
 			break;
 		// controller status port (read)
 		case 0xb5:
@@ -176,9 +194,11 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 			break;
 		// track reg port
 		case 0xb1:
+			jwd_controller->trackRegister = value;
 			break;
 		// sector reg port
 		case 0xb2:
+			jwd_controller->sectorRegister = value;
 			break;
 		// data reg port
 		case 0xb3:
@@ -189,7 +209,7 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 			break;
 		// controller status port
 		case 0xb5:
-			printf(" ** NOTICE: Writing to WD1797 status port 0xB5 (read only)!\n");
+			printf(" ** WARNING: Writing to WD1797 status port 0xB5 (read only)!\n");
 			break;
 		default:
 			printf("%X is an invalid port!\n", port_addr);
@@ -489,7 +509,7 @@ void commandStep(JWD1797* w, double us) {
 	}	// END TYPE I command
 
 	else if(w->currentCommandType == 2) {
-		// do delay if E set
+		// do delay if E set and delay not done yet
 		if(w->e_delay_done == 0 && w->delay15ms) {
 			// clock the e delay timer
 			w->e_delay_timer += us;
@@ -500,13 +520,68 @@ void commandStep(JWD1797* w, double us) {
 			}
 			return;	// delay still in progess - do not continue with command
 		}
-		// sample HLT pin - do not continue with command if HLT pin had not engaged
+		// sample HLT pin - do not continue with command if HLT pin has not engaged
 		if(w->HLT_pin == 0) {return;}
 		updateTG43Signal(w);
 
+		// set start byte for reading/writing if not set already
+		if(!w->start_byte_set) {
+			w->disk_img_index_pointer = getDiskFileBytePointer(w);
+			w->start_byte_set = 1;
+			w->start_byte = w->disk_img_index_pointer;
+		}
 
+		// READ SECTOR
+		if(w->currentCommandName == "READ SECTOR") {
+			// clock byte read timer
+			w->assemble_data_byte_timer += us;
+			if(w->assemble_data_byte_timer >= ASSEMBLE_DATA_BYTE_LIMIT) {
+				/* did computer read the last data byte in the DR? If DRQ is still high,
+					it did not; set lost data bit in status */
+				if(w->drq) {w->statusRegister |= 0b00000100;}
+				// continue to read bytes...
+				w->dataRegister = disk_content_array[w->disk_img_index_pointer];
+				w->drq = 1;
+				w->disk_img_index_pointer++;
+				w->assemble_data_byte_timer = 0.0;
+				// check if all sector bytes have been read
+				if((w->disk_img_index_pointer - w->start_byte) >= w->sector_length) {
+					// check multiple records flag
+					if(w->multipleRecords) {
+						w->sectorRegister++;
+						// check if number of sectors have been exceeded
+						if(w->sectorRegister >= w->sectors_per_track) {
+							// command is done
+							w->command_done = 1;
+							w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+							w->HLD_idle_reset_timer = 0.0;
+							// assume verification operation is successful - generate interrupt
+							w->intrq = 1;
+							// e8259_set_irq0 (e8259_slave, 1);
+							return;
+						}
+						w->start_byte_set = 0;	// reset to start reading from the next sector
+					}
+					else {
+						// command is done
+						w->command_done = 1;
+						w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+						w->HLD_idle_reset_timer = 0.0;
+						// assume verification operation is successful - generate interrupt
+						w->intrq = 1;
+						// e8259_set_irq0 (e8259_slave, 1);
+						return;
+					}
+				}
+			}
+		} // END READ SECTOR
 
-	}
+		// WRITE SECTOR
+		else if(w->currentCommandName == "WRITE SECTOR") {
+
+		}	// END WRITE SECTOR
+
+	} // END TYPE II command
 
 }	// END general command step
 
@@ -543,7 +618,6 @@ void setupTypeICommand(JWD1797* w) {
 		// one shot from HLD pin resets HLT pin
 		w->HLT_pin = 0;
 		w->HLD_idle_reset_timer = 0.0;
-
 	}
 	else if(!w->headLoadFlag && w->verifyFlag) {w->delayed_HLD = 1;}
 	else if(w->headLoadFlag && w->verifyFlag && w->HLD_pin == 0) {
@@ -553,9 +627,7 @@ void setupTypeICommand(JWD1797* w) {
 		// one shot from HLD pin resets HLT pin
 		w->HLT_pin = 0;
 		w->HLD_idle_reset_timer = 0.0;
-
 	}
-
 	// initialize command type I timer
 	// w->command_typeI_timer = 0.0;
 	// add appropriate time based on V flag (1 MHz clock) 30,000 us
@@ -563,24 +635,26 @@ void setupTypeICommand(JWD1797* w) {
 }
 
 void setupTypeIICommand(JWD1797* w) {
+	// NOTE: assume Sector register has the target sector number
 	w->currentCommandType = 2;
 	w->command_done = 0;
 	w->e_delay_done = 0;
+	w->start_byte_set = 0;
 	// reset DRQ line
 	w->drq = 0;
 	// reset INT request line
 	w->intrq = 0;
 	// e8259_set_irq0 (e8259_slave, 0);
 	// set busy status
-	w->statusRegister |= 1;
+	w->statusRegister |= 0b00000001;
 	// reset drq/lost data/record not found/bits 5, 6 in status register
 	w->statusRegister &= 0b10001001;
 
 	/* set TYPE II flags */
-	w->updateSSO = (w->commandRegister>>1) & 1;
-	w->delay15ms = (w->commandRegister>>2) & 1;
-	w->swapSectorLength = (w->commandRegister>>3) & 1;
-	w->multipleRecords = (w->commandRegister>>4) & 1;
+	w->updateSSO = (w->commandRegister>>1) & 1;	// U
+	w->delay15ms = (w->commandRegister>>2) & 1;	// E
+	w->swapSectorLength = (w->commandRegister>>3) & 1;	// L
+	w->multipleRecords = (w->commandRegister>>4) & 1; // m
 
 	// update SSO (side select) line
 	if(w->currentCommandType == 2 || w->currentCommandType == 3) {
@@ -888,4 +962,50 @@ void handleHLTTimer(JWD1797* w, double time) {
 			w->HLT_timer_active = 0;
 		}
 	}
+}
+
+// http://www.cplusplus.com/reference/cstdio/fread/
+char* diskImageToCharArray(char* fileName, JWD1797* w) {
+	FILE* disk_img;
+	long diskFileSize;
+	size_t check_result;
+	char* diskFileArray;
+  // open current file (disk in drive)
+  disk_img = fopen(fileName, "rb");
+	/* set disk attributes based on disk image file (40 tracks/9 sectors per track/
+		512 bytes per sector for 360k z-dos disk)
+		/* **** THIS IS HARDCODED for A Z-DOS DISK.
+			THIS SHOULD BE DYNAMIC! ***
+			How do we extract these values form the disk data? *** */
+	w->cylinders = 40;	// 0-39
+	w->sectors_per_track = 9;	// 1-9
+	w->sector_length = 512;	// 0-511
+	/* */
+	// obtain disk size
+	fseek(disk_img, 0, SEEK_END);
+	diskFileSize = ftell(disk_img);
+	rewind(disk_img);
+	// allocate memory to handle array for entire disk image
+	diskFileArray = (char*) malloc(sizeof(char) * diskFileSize);
+	/* copy disk image file into array buffer
+		("result" variable makes sure all expected bytes are copied) */
+	check_result = fread(diskFileArray, 1, diskFileSize, disk_img);
+	if(check_result != diskFileSize) {printf("%s\n", "ERROR Converting disk image");}
+	else {printf("%s\n", "disk image file converted to char array successfully!");}
+	fclose(disk_img);
+	return diskFileArray;
+}
+
+// returns byte pointer to get a certain byte from the disk image file to start at
+int getDiskFileBytePointer(JWD1797* w) {
+	int return_value = 0;
+	// check side (head) -  if SSO == 1 -- side (head) = 2
+	if(w->sso_pin) {
+		return_value += (w->sector_length * w->sectors_per_track * w->cylinders);
+	}
+	// which track?
+	return_value += (w->trackRegister * (w->sector_length * w->sectors_per_track));
+	// which sector? (sector numbers start at 1)
+	return_value += ((w->sectorRegister - 1) * w->sector_length);
+	return return_value;
 }

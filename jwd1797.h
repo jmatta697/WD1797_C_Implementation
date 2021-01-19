@@ -23,8 +23,6 @@ unsigned char commandRegister; // do not load when device is busy - except force
 unsigned char statusRegister;
 unsigned char CRCRegister;
 
-// keep track of current byte being pointed to by the READ/WRITE head
-int disk_img_index_pointer;
 // ready input from disk drive interface (0 = not ready, 1 = ready)
 // int ready;
 // step direction output to disk drive interface (0 = out->track00, 1 = in->track39)
@@ -61,6 +59,7 @@ int command_done; // flag indicating that entire command is done -
                   // including verification and delay -
 int head_settling_done;
 int e_delay_done;
+int start_byte_set;
 int terminate_command;
 
 // TESTING
@@ -72,6 +71,7 @@ double index_encounter_timer;
 double step_timer;
 double verify_head_settling_timer;
 double e_delay_timer;
+double assemble_data_byte_timer;
 double command_typeII_timer;
 double command_typeIII_timer;
 double command_typeIV_timer;
@@ -107,6 +107,14 @@ int intrq;  // attached to I0 of the slave 8259 interrupt controller in the Z-10
 
 int current_track;
 
+int cylinders; // (tracks per side)
+int sectors_per_track;
+int sector_length;
+
+// keep track of current byte being pointed to by the READ/WRITE head
+int disk_img_index_pointer;
+int start_byte;
+
 
 } JWD1797;
 
@@ -133,3 +141,5 @@ void updateTG43Signal(JWD1797*);
 void handleIndexPulse(JWD1797*, double);
 void handleHLDIdle(JWD1797*, double);
 void handleHLTTimer(JWD1797*, double);
+char* diskImageToCharArray(char*, JWD1797*);
+int getDiskFileBytePointer(JWD1797*);
