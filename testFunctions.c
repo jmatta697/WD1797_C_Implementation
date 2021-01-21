@@ -7,6 +7,7 @@
 #include "utility_functions.h"
 
 void restoreTestPrintHelper(JWD1797*);
+void readSectorPrintHelper(JWD1797*);
 void seekTestPrintHelper(JWD1797*);
 
 /* ------------- TEST FUNCTIONS ---------------- */
@@ -423,6 +424,132 @@ void seekCommandTest(JWD1797* jwd1797, double instr_times[]) {
   }
 }
 
+void stepCommandTest(JWD1797* jwd1797, double instr_times[]) {
+  resetJWD1797(jwd1797);
+  jwd1797->current_track = 6;
+  jwd1797->direction_pin = 1;
+  writeJWD1797(jwd1797, 0xB0, 0b00110111);
+  printf("\n\n%s\n", "-------------- STEP COMMAND TEST --------------");
+  for(int i = 0; i < 500000; i++) {
+    // printf("%s\n", "loop");
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+
+    if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
+      (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
+      (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015) ||
+      (jwd1797->master_timer >= 119990 && jwd1797->master_timer <= 120015)) {
+        sleep(1); // delay loop iteration for observation
+        seekTestPrintHelper(jwd1797);
+    }
+  }
+}
+
+void stepInCommandTest(JWD1797* jwd1797, double instr_times[]) {
+  resetJWD1797(jwd1797);
+  jwd1797->current_track = 5;
+  writeJWD1797(jwd1797, 0xB0, 0b01011111);
+  printf("\n\n%s\n", "-------------- STEP-IN COMMAND TEST --------------");
+  for(int i = 0; i < 500000; i++) {
+    // printf("%s\n", "loop");
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+
+    if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
+      (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
+      (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015) ||
+      (jwd1797->master_timer >= 119990 && jwd1797->master_timer <= 120015)) {
+        sleep(1); // delay loop iteration for observation
+        seekTestPrintHelper(jwd1797);
+    }
+  }
+}
+
+void stepOutCommandTest(JWD1797* jwd1797, double instr_times[]) {
+  resetJWD1797(jwd1797);
+  // jwd1797->HLD_pin = 1;
+  // jwd1797->HLT_pin = 1;
+  jwd1797->current_track = 0;
+  writeJWD1797(jwd1797, 0xB0, 0b01111111);
+  printf("\n\n%s\n", "-------------- STEP-OUT COMMAND TEST --------------");
+  for(int i = 0; i < 500000; i++) {
+    // printf("%s\n", "loop");
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+
+    if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
+      (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
+      (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015) ||
+      (jwd1797->master_timer >= 119990 && jwd1797->master_timer <= 120015)) {
+        sleep(1); // delay loop iteration for observation
+        seekTestPrintHelper(jwd1797);
+    }
+  }
+}
+
+void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
+  int data_byte_read = 0;
+  int drq_high = 0;
+  // read first sector from disk
+  resetJWD1797(jwd1797);
+  printf("\n\n%s\n", "-------------- READ SECTOR COMMAND TEST --------------");
+  // set HLD and HLT to high to test E delay timer
+  // jwd1797->HLD_pin = 1;
+  // jwd1797->HLT_pin = 1;
+  // load sector register to target a sector on the current track
+  writeJWD1797(jwd1797, 0xB2, 0b00000111);
+  // set track/track register to 0
+  jwd1797->current_track = 1;
+  jwd1797->trackRegister = 0b00000001;
+
+  // issue READ SECTOR command - SSO = 1, no 15ms delay, single record
+  writeJWD1797(jwd1797, 0xB0, 0b10011110);
+
+  for(int i = 0; i < 100000; i++) {
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+    if((jwd1797->master_timer >= 14990 && jwd1797->master_timer <= 15010) ||
+      jwd1797->master_timer >= 59990) {
+        readSectorPrintHelper(jwd1797);
+        sleep(1);
+    }
+    // if(jwd1797->master_timer >= 14990) {
+    //     readSectorPrintHelper(jwd1797);
+    //     sleep(1);
+    // }
+    // check if DRQ is high (check status bit S1)...
+    drq_high = ((readJWD1797(jwd1797, 0xB0)) >> 1)&1;
+    if(drq_high) {
+      // printf("%02X ", readJWD1797(jwd1797, 0xB3));
+      printf("\n%s%02X\n\n", "** BYTE READ from DR: ", readJWD1797(jwd1797, 0xB3));
+    }
+  }
+}
+
+void readSectorPrintHelper(JWD1797* jwd1797) {
+  printf("%s%f\n", "MASTER CLOCK: ", jwd1797->master_timer);
+  printf("%s%f\n", "HLT TIMER: ", jwd1797->HLT_timer);
+  printf("%s%f\n", "E (15ms) DELAY TIMER: ", jwd1797->e_delay_timer);
+  printf("%s%f\n", "DATA BYTE ASSEMBLY CLOCK: ", jwd1797->assemble_data_byte_timer);
+  printf("%s%d\n", "DRQ: ", jwd1797->drq);
+  printf("%s%02X\n", "DATA REGISTER: ", jwd1797->dataRegister);
+  printf("%s", "SECTOR REGISTER: ");
+  print_bin8_representation(jwd1797->sectorRegister);
+  printf("%s\n", "");
+  printf("%s", "TYPE II STATUS REGISTER: ");
+  print_bin8_representation(jwd1797->statusRegister);
+  printf("%s\n", "");
+  printf("%s\n", "");
+}
+
 void seekTestPrintHelper(JWD1797* jwd1797) {
   printf("%s", "MASTER CLOCK: ");
   printf("%f\n", jwd1797->master_timer);
@@ -433,13 +560,13 @@ void seekTestPrintHelper(JWD1797* jwd1797) {
   printf("%s", "CURRENT TRACK: ");
   printf("%d\n", jwd1797->current_track);
   printf("%s", "TRACK REGISTER: ");
-  print_bin8_representation(readJWD1797(jwd1797, 0xB1));
+  print_bin8_representation(jwd1797->trackRegister);
   printf("%s\n", "");
   printf("%s", "DATA REGISTER: ");
-  print_bin8_representation(readJWD1797(jwd1797, 0xB3));
+  print_bin8_representation(jwd1797->dataRegister);
   printf("%s\n", "");
   printf("%s", "TYPE I STATUS REGISTER: ");
-  print_bin8_representation(readJWD1797(jwd1797, 0xB0));
+  print_bin8_representation(jwd1797->statusRegister);
   printf("%s\n", "");
   printf("%s\n", "");
 }

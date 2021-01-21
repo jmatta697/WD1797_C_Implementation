@@ -109,7 +109,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->HLT_timer = 0.0;
 
 	jwd_controller->index_pulse_pin = 0;
-	jwd_controller->ready_pin = 0;
+	jwd_controller->ready_pin = 1;	// make drive ready immediately after reset
 	jwd_controller->tg43_pin = 0;
 	jwd_controller->HLD_pin = 0;
 	jwd_controller->HLT_pin = 0;
@@ -123,11 +123,12 @@ void resetJWD1797(JWD1797* jwd_controller) {
 
 	jwd_controller->drq = 0;
 	jwd_controller->intrq = 0;
+	jwd_controller->not_master_reset = 1;
 
 	jwd_controller->current_track = 0;
 
 	jwd_controller->disk_img_index_pointer = 0;
-	jwd_controller->start_byte = 0;
+	jwd_controller->rw_start_byte = 0;
 
 	disk_content_array = diskImageToCharArray("z-dos-1.img", jwd_controller);
 	// TEST disk image to array function
@@ -161,7 +162,6 @@ unsigned int readJWD1797(JWD1797* jwd_controller, unsigned int port_addr) {
 				(DRQ pin high) because of a READ operation */
 			if(jwd_controller->currentCommandType == 2 && jwd_controller->drq) {
 				jwd_controller->drq = 0; // reset data request line
-				jwd_controller->statusRegister &= 0b11111101; // reset S1 (data request bit)
 			}
 			break;
 		// control latch reg port (write)
@@ -174,14 +174,11 @@ unsigned int readJWD1797(JWD1797* jwd_controller, unsigned int port_addr) {
 		default:
 			printf("%X is an invalid port!\n", port_addr);
 	}
+	return r_val;
 }
 
 // write data to wd1797 based on port address
 void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int value) {
-  /* whenever a READ/WRITE command (command type II or III) is received, the READY
-    input from the drive is sampled. If the ready signal is low (0), the command
-    is not executed and an interrupt is generated. ALl type I commands are
-    performed regardless of the state of the READY pin from the drive. */
 	// printf("\nWrite ");
 	// print_bin8_representation(value);
 	// printf("%s%X\n\n", " to wd1797/port: ", port_addr);
@@ -223,26 +220,41 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 void doJWD1797Cycle(JWD1797* w, double us) {
 	w->master_timer += us;	// @@@ DEBUG clock @@@
 
+	/* update status register bit 7 (NOT READY) based on inverted not_master_reset
+		or'd with inverted ready_pin (ALL COMMANDS) */
+	if(((!w->ready_pin | !w->not_master_reset)&1) == 0) {
+		w->statusRegister &= 0b01111111; // reset NOT READY bit
+	}
+	else {w->statusRegister |= 0b10000000;} // set NOT READY bit
+
 	// update not_track00_pin
 	// check track and set not_track00_pin accordingly
 	if(w->current_track == 0) {w->not_track00_pin = 0;}
 	else {w->not_track00_pin = 1;}
-	// update type I status bit 2 (S2) for track 00 status
-	if(w->currentCommandType == 1 && !w->not_track00_pin) {
-		w->statusRegister |= 0b00000100;
-	}
-	// clear TYPE I status bit 2 (S2) if not on track 00
-	else {w->statusRegister &= 0b11111011;}
 
 	handleIndexPulse(w, us);
 
 	handleHLTTimer(w, us);
-	// Type I status bit 5 (S5) will be set if HLD and HLT pins are high
-	if(w->currentCommandType == 1 && w->HLD_pin && w->HLT_pin) {
-		w->statusRegister |= 0b00100000;
+
+	if(w->currentCommandType == 1) {
+		// Type I status bit 5 (S5) will be set if HLD and HLT pins are high
+		if(w->HLD_pin && w->HLT_pin) {w->statusRegister |= 0b00100000;}
+		// clear TYPE I status bit 5 (S5) if HLD and HLT both not high
+		else {w->statusRegister &= 0b11011111;}
+		// update type I status bit 2 (S2) for track 00 status
+		if(!w->not_track00_pin) {w->statusRegister |= 0b00000100;}
+		// clear TYPE I status bit 2 (S2) if not on track 00
+		else {w->statusRegister &= 0b11111011;}
 	}
-	// clear TYPE I status bit 5 (S5) if HLD and HLT both not high
-	else {w->statusRegister &= 0b11011111;}
+
+	/* update DATA REQUEST status bit (S1) for type II and III commands based on
+		DRQ pin */
+	if(w->currentCommandType == 2 || w->currentCommandType == 3) {
+		// Type II/III status bit 1 (S1) will be set if DRQ is high
+		if(w->drq) {w->statusRegister |= 0b00000010;}
+		// ...and cleared if DRQ is low
+		else {w->statusRegister &= 0b11111101;}
+	}
 
 	// check if command is still active and do command step if so...
 	if(!w->command_done) {
@@ -278,8 +290,10 @@ void doJWD1797Command(JWD1797* w) {
 		printf("TYPE II Command in WD1797 command register..\n");
 		// sample READY input from DRIVE
 		if(!w->ready_pin) {
+			printf("\n%s\n\n", "DRIVE NOT READY! Command cancelled");
 			// ** generate interrupt **
 			w->intrq = 1; // MUST SEND INTERRUPT to slave int controller also...
+			// e8259_set_irq0 (e8259_slave, 1);
 			return; // do not execute command
 		}
 		setupTypeIICommand(w);
@@ -292,8 +306,10 @@ void doJWD1797Command(JWD1797* w) {
 		printf("TYPE III Command in WD1797 command register..\n");
 		// sample READY input from DRIVE
 		if(!w->ready_pin) {
+			printf("\n%s\n\n", "DRIVE NOT READY! Command cancelled");
 			// ** generate interrupt **
 			w->intrq = 1; // MUST SEND INTERRUPT to slave int controller also...
+			// e8259_set_irq0 (e8259_slave, 1);
 			return; // do not execute command
 		}
 		setupTypeIIICommand(w);
@@ -377,7 +393,13 @@ void commandStep(JWD1797* w, double us) {
 					// update track register to 0 regardless of track update flag
 					w->trackRegister = 0;
 					w->command_action_done = 1;	// indicate end of command action
-					printf("%s\n", "STEP - command action DONE");
+					printf("\n%s\n\n", "STEP - command action DONE (tried to step to track -1)");
+					return;
+				}
+				// check if step would put head past the number of tracks on the disk
+				else if((w->current_track == (w->cylinders - 1)) && w->direction_pin == 1) {
+					w->command_action_done = 1;
+					printf("\n%s\n\n", "STEP - command action DONE (tried to step past track limit)");
 					return;
 				}
 				else {
@@ -401,6 +423,11 @@ void commandStep(JWD1797* w, double us) {
 			}	// END STEP
 
 			else if(w->currentCommandName == "STEP-IN") {
+				if((w->current_track == (w->cylinders - 1))) {
+					w->command_action_done = 1;
+					printf("\n%s\n\n", "STEP-IN - command action DONE (tried to step past track limit)");
+					return;
+				}
 				w->step_timer += us;
 				/* check step timer - has it completed one step according to the step rate?
 					Step rates are in milliseconds (ms), so step rate must be multipled by 1000
@@ -413,17 +440,17 @@ void commandStep(JWD1797* w, double us) {
 					// reset step timer
 					w->step_timer = 0.0;
 					w->command_action_done = 1;	// indicate end of command action
-					printf("%s\n", "STEP - command action DONE");
+					printf("%s\n", "STEP-IN - command action DONE");
 					return;
 				}
 			}
 
 			else if(w->currentCommandName == "STEP-OUT") {
-				if(w->not_track00_pin == 0 && w->direction_pin == 0) {
+				if(w->not_track00_pin == 0) {
 					// update track register to 0 regardless of track update flag
 					w->trackRegister = 0;
 					w->command_action_done = 1;	// indicate end of command action
-					printf("%s\n", "STEP - command action DONE");
+					printf("\n%s\n\n", "STEP-OUT - command action DONE (tried to step to track -1)");
 					return;
 				}
 				else {
@@ -528,13 +555,13 @@ void commandStep(JWD1797* w, double us) {
 		if(!w->start_byte_set) {
 			w->disk_img_index_pointer = getDiskFileBytePointer(w);
 			w->start_byte_set = 1;
-			w->start_byte = w->disk_img_index_pointer;
+			w->rw_start_byte = w->disk_img_index_pointer;
 		}
 
 		// READ SECTOR
 		if(w->currentCommandName == "READ SECTOR") {
-			// clock byte read timer
-			w->assemble_data_byte_timer += us;
+			w->assemble_data_byte_timer += us;	// clock byte read timer
+			// did the timer expire?
 			if(w->assemble_data_byte_timer >= ASSEMBLE_DATA_BYTE_LIMIT) {
 				/* did computer read the last data byte in the DR? If DRQ is still high,
 					it did not; set lost data bit in status */
@@ -545,12 +572,12 @@ void commandStep(JWD1797* w, double us) {
 				w->disk_img_index_pointer++;
 				w->assemble_data_byte_timer = 0.0;
 				// check if all sector bytes have been read
-				if((w->disk_img_index_pointer - w->start_byte) >= w->sector_length) {
+				if((w->disk_img_index_pointer - w->rw_start_byte) >= w->sector_length) {
 					// check multiple records flag
 					if(w->multipleRecords) {
 						w->sectorRegister++;
 						// check if number of sectors have been exceeded
-						if(w->sectorRegister >= w->sectors_per_track) {
+						if(w->sectorRegister > w->sectors_per_track) {
 							// command is done
 							w->command_done = 1;
 							w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
@@ -576,9 +603,16 @@ void commandStep(JWD1797* w, double us) {
 			}
 		} // END READ SECTOR
 
-		// WRITE SECTOR
+		// WRITE SECTOR (*** NOT IMPLEMENTED - command completes without executing ***)
 		else if(w->currentCommandName == "WRITE SECTOR") {
-
+			// command is done
+			w->command_done = 1;
+			w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+			w->HLD_idle_reset_timer = 0.0;
+			// assume verification operation is successful - generate interrupt
+			w->intrq = 1;
+			// e8259_set_irq0 (e8259_slave, 1);
+			return;
 		}	// END WRITE SECTOR
 
 	} // END TYPE II command
@@ -640,20 +674,21 @@ void setupTypeIICommand(JWD1797* w) {
 	w->command_done = 0;
 	w->e_delay_done = 0;
 	w->start_byte_set = 0;
+
+	// set busy status
+	w->statusRegister |= 0b00000001;
 	// reset DRQ line
 	w->drq = 0;
+	// reset drq/lost data/record not found/bits 5, 6 in status register
+	w->statusRegister &= 0b10001001;
 	// reset INT request line
 	w->intrq = 0;
 	// e8259_set_irq0 (e8259_slave, 0);
-	// set busy status
-	w->statusRegister |= 0b00000001;
-	// reset drq/lost data/record not found/bits 5, 6 in status register
-	w->statusRegister &= 0b10001001;
 
 	/* set TYPE II flags */
 	w->updateSSO = (w->commandRegister>>1) & 1;	// U
 	w->delay15ms = (w->commandRegister>>2) & 1;	// E
-	w->swapSectorLength = (w->commandRegister>>3) & 1;	// L
+	w->swapSectorLength = (w->commandRegister>>3) & 1;	// L (1 for IBM format)
 	w->multipleRecords = (w->commandRegister>>4) & 1; // m
 
 	// update SSO (side select) line
@@ -661,13 +696,15 @@ void setupTypeIICommand(JWD1797* w) {
 		w->sso_pin = w->updateSSO? 1:0;
 	}
 
-	// set HLD pin
-	w->HLT_timer_active = 1;
-	w->HLT_timer = 0.0;
-	w->HLD_pin = 1;
-	// one shot from HLD pin resets HLT pin
-	w->HLT_pin = 0;
-	w->HLD_idle_reset_timer = 0.0;
+	if(w->HLD_pin == 0) {
+		// set HLD pin
+		w->HLT_timer_active = 1;
+		w->HLT_timer = 0.0;
+		w->HLD_pin = 1;
+		// one shot from HLD pin resets HLT pin
+		w->HLT_pin = 0;
+		w->HLD_idle_reset_timer = 0.0;
+	}
 
 	w->e_delay_timer = 0.0;
 	// w->command_typeII_timer = 0.0;
@@ -990,8 +1027,8 @@ char* diskImageToCharArray(char* fileName, JWD1797* w) {
 	/* copy disk image file into array buffer
 		("result" variable makes sure all expected bytes are copied) */
 	check_result = fread(diskFileArray, 1, diskFileSize, disk_img);
-	if(check_result != diskFileSize) {printf("%s\n", "ERROR Converting disk image");}
-	else {printf("%s\n", "disk image file converted to char array successfully!");}
+	if(check_result != diskFileSize) {printf("%s\n\n", "ERROR Converting disk image");}
+	else {printf("%s\n\n", "disk image file converted to char array successfully!");}
 	fclose(disk_img);
 	return diskFileArray;
 }

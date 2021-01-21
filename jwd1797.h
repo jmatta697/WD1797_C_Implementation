@@ -104,6 +104,10 @@ int intrq;  // attached to I0 of the slave 8259 interrupt controller in the Z-10
   /* It is set at the completion of every command and is reset by reading the status
     register or by loading the command register with a new command. It is also
     set when a forced interrupt condition is met. */
+int not_master_reset; /* if this pin goes low for at least 50us, 0b00000011
+  into the command register (RESTORE 30ms step (for 1MHz)) and the NOT READY
+  status bit 7 is reset. When the not_master_reset pin goes back high, the
+  RESTORE command is executed and the sector register is set to 0b00000001 */
 
 int current_track;
 
@@ -113,7 +117,7 @@ int sector_length;
 
 // keep track of current byte being pointed to by the READ/WRITE head
 int disk_img_index_pointer;
-int start_byte;
+int rw_start_byte;
 
 
 } JWD1797;
