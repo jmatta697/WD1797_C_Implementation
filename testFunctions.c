@@ -534,6 +534,10 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
   }
 }
 
+void readAddressCommandTest(JWD1797* jwd1797) {
+
+}
+
 void readSectorPrintHelper(JWD1797* jwd1797) {
   printf("%s%f\n", "MASTER CLOCK: ", jwd1797->master_timer);
   printf("%s%f\n", "HLT TIMER: ", jwd1797->HLT_timer);

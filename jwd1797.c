@@ -27,15 +27,15 @@
 // when non-busy status and HLD high, reset HLD after 15 index pulses
 #define HLD_IDLE_RESET_LIMIT 15*INDEX_HOLE_ENCOUNTER_US
 // head load timing (this can be set from 30-100 ms, depending on drive)
-#define HEAD_LOAD_TIMING_LIMIT 60*1000	// set to 60 ms (60,000 us)
+#define HEAD_LOAD_TIMING_LIMIT 45*1000	// set to 45 ms (45,000 us)
 // verify time is 30 milliseconds for a 1MHz clock
 #define VERIFY_HEAD_SETTLING_LIMIT 30*1000
-// E (15 ms delay) for TYPE II and III commands
-#define E_DELAY_LIMIT 15*1000
+// E (15 ms delay) for TYPE II and III commands (30 ms for 1 MHz clock)
+#define E_DELAY_LIMIT 30*1000
 /* time limit for data shift register to assemble byte in data register
 	(simulated). This value is based on 'https://www.hp9845.net/9845/projects/fdio/#hp_formats'
 	where the 5.25" DS/DD disk is reported to have a 300 kbps data rate. */
-#define ASSEMBLE_DATA_BYTE_LIMIT 26.64
+#define ASSEMBLE_DATA_BYTE_LIMIT 26.67	// ~ 3.33375 us/bit
 
 // extern e8259_t* e8259_slave;
 
@@ -288,14 +288,6 @@ void doJWD1797Command(JWD1797* w) {
 		 loaded into the sector register */
 	else if(((w->commandRegister>>5) & 7) < 6) {
 		printf("TYPE II Command in WD1797 command register..\n");
-		// sample READY input from DRIVE
-		if(!w->ready_pin) {
-			printf("\n%s\n\n", "DRIVE NOT READY! Command cancelled");
-			// ** generate interrupt **
-			w->intrq = 1; // MUST SEND INTERRUPT to slave int controller also...
-			// e8259_set_irq0 (e8259_slave, 1);
-			return; // do not execute command
-		}
 		setupTypeIICommand(w);
 		setTypeIICommand(w);
 	}
@@ -304,14 +296,6 @@ void doJWD1797Command(JWD1797* w) {
 		 then 5 in their shifted 3 high bits */
 	else if(((w->commandRegister>>5) & 7) > 5) {
 		printf("TYPE III Command in WD1797 command register..\n");
-		// sample READY input from DRIVE
-		if(!w->ready_pin) {
-			printf("\n%s\n\n", "DRIVE NOT READY! Command cancelled");
-			// ** generate interrupt **
-			w->intrq = 1; // MUST SEND INTERRUPT to slave int controller also...
-			// e8259_set_irq0 (e8259_slave, 1);
-			return; // do not execute command
-		}
 		setupTypeIIICommand(w);
 		setTypeIIICommand(w);
 	}
@@ -348,6 +332,8 @@ void commandStep(JWD1797* w, double us) {
 					if(w->step_timer >= (w->stepRate*1000)) {
 						w->direction_pin = 0;
 						w->current_track--;
+						// step the disk image index down track bytes
+						w->disk_img_index_pointer -= (w->sector_length * w->sectors_per_track);
 						// reset step timer
 						w->step_timer = 0.0;
 					}
@@ -367,6 +353,8 @@ void commandStep(JWD1797* w, double us) {
 					if(w->step_timer >= (w->stepRate*1000)) {
 						w->direction_pin = 0;
 						w->current_track--;
+						// step the disk image index down track bytes
+						w->disk_img_index_pointer -= (w->sector_length * w->sectors_per_track);
 						// update track register with current track
 						w->trackRegister = w->current_track;
 						// reset step timer
@@ -378,6 +366,8 @@ void commandStep(JWD1797* w, double us) {
 					if(w->step_timer >= (w->stepRate*1000)) {
 						w->direction_pin = 1;
 						w->current_track++;
+						// step the disk image index up track bytes
+						w->disk_img_index_pointer += (w->sector_length * w->sectors_per_track);
 						// update track register with current track
 						w->trackRegister = w->current_track;
 						// reset step timer
@@ -409,8 +399,14 @@ void commandStep(JWD1797* w, double us) {
 						to change it to microseconds (us). */
 					if(w->step_timer >= (w->stepRate*1000)) {
 						// step track according to direction_pin
-						if(w->direction_pin == 0) {w->current_track--;}
-						else if(w->direction_pin == 1) {w->current_track++;}
+						if(w->direction_pin == 0) {
+							w->current_track--;
+							w->disk_img_index_pointer -= (w->sector_length * w->sectors_per_track);
+						}
+						else if(w->direction_pin == 1) {
+							w->current_track++;
+							w->disk_img_index_pointer += (w->sector_length * w->sectors_per_track);
+						}
 						// update track register if track update flag is high
 						if(w->trackUpdateFlag) {w->trackRegister = w->current_track;}
 						// reset step timer
@@ -435,6 +431,7 @@ void commandStep(JWD1797* w, double us) {
 				if(w->step_timer >= (w->stepRate*1000)) {
 					// step track according to direction_pin
 					w->current_track++;
+					w->disk_img_index_pointer += (w->sector_length * w->sectors_per_track);
 					// update track register if track update flag is high
 					if(w->trackUpdateFlag) {w->trackRegister = w->current_track;}
 					// reset step timer
@@ -461,6 +458,7 @@ void commandStep(JWD1797* w, double us) {
 					if(w->step_timer >= (w->stepRate*1000)) {
 						// step track according to direction_pin
 						w->current_track--;
+						w->disk_img_index_pointer -= (w->sector_length * w->sectors_per_track);
 						// update track register if track update flag is high
 						if(w->trackUpdateFlag) {w->trackRegister = w->current_track;}
 						// reset step timer
@@ -551,9 +549,9 @@ void commandStep(JWD1797* w, double us) {
 		if(w->HLT_pin == 0) {return;}
 		updateTG43Signal(w);
 
-		// set start byte for reading/writing if not set already
+		// *** REVAMP THIS set start byte for reading/writing if not set already
 		if(!w->start_byte_set) {
-			w->disk_img_index_pointer = getDiskFileBytePointer(w);
+			w->disk_img_index_pointer = getTargetDiskFileByte(w);
 			w->start_byte_set = 1;
 			w->rw_start_byte = w->disk_img_index_pointer;
 		}
@@ -610,12 +608,37 @@ void commandStep(JWD1797* w, double us) {
 			w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
 			w->HLD_idle_reset_timer = 0.0;
 			// assume verification operation is successful - generate interrupt
-			w->intrq = 1;
+			// w->intrq = 1;
 			// e8259_set_irq0 (e8259_slave, 1);
 			return;
 		}	// END WRITE SECTOR
 
 	} // END TYPE II command
+
+	else if(w->currentCommandType == 3) {
+
+		// do delay if E set and delay not done yet
+		if(w->e_delay_done == 0 && w->delay15ms) {
+			// clock the e delay timer
+			w->e_delay_timer += us;
+			// check if E delay timer has reached limit
+			if(w->e_delay_timer >= E_DELAY_LIMIT) {
+				w->e_delay_done = 1;
+				w->e_delay_timer = 0.0;
+			}
+			return;	// delay still in progess - do not continue with command
+		}
+		// check HLT
+		if(w->HLT_pin == 0) {return;}
+		updateTG43Signal(w);
+
+		if(w->currentCommandName == "READ ADDRESS") {
+			printf("%s%d\n", "Current disk image index pointer: ",
+				w->disk_img_index_pointer);
+		}
+
+
+	} // END TYPE III command
 
 }	// END general command step
 
@@ -685,6 +708,17 @@ void setupTypeIICommand(JWD1797* w) {
 	w->intrq = 0;
 	// e8259_set_irq0 (e8259_slave, 0);
 
+	// sample READY input from DRIVE
+	if(!w->ready_pin) {
+		printf("\n%s\n\n", "DRIVE NOT READY! Command cancelled");
+		w->command_done = 1;
+		w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+		// ** generate interrupt **
+		w->intrq = 1; // MUST SEND INTERRUPT to slave int controller also...
+		// e8259_set_irq0 (e8259_slave, 1);
+		return; // do not execute command
+	}
+
 	/* set TYPE II flags */
 	w->updateSSO = (w->commandRegister>>1) & 1;	// U
 	w->delay15ms = (w->commandRegister>>2) & 1;	// E
@@ -715,19 +749,38 @@ void setupTypeIICommand(JWD1797* w) {
 void setupTypeIIICommand(JWD1797* w) {
 	w->currentCommandType = 3;
 	w->command_done = 0;
+	w->e_delay_done = 0;
 	// set busy status
 	w->statusRegister |= 1;
+	/* reset status bits 2 (lost data), 4 (record not found),
+		5 (record type/write fault) */
+	w->statusRegister &= 0b11001011;
+
+	// sample READY input from DRIVE
+	if(!w->ready_pin) {
+		printf("\n%s\n\n", "DRIVE NOT READY! Command cancelled");
+		w->command_done = 1;
+		w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+		// ** generate interrupt **
+		w->intrq = 1; // MUST SEND INTERRUPT to slave int controller also...
+		// e8259_set_irq0 (e8259_slave, 1);
+		return; // do not execute command
+	}
+
 	/* set TYPE III flags */
 	w->updateSSO = (w->commandRegister>>1) & 1;
+	w->sso_pin = w->updateSSO;
 	w->delay15ms = (w->commandRegister>>2) & 1;
-	updateTG43Signal(w);
-	w->HLD_pin = 1;
-	// initialize HLD idle timer (set to 15 index pulses)
-	w->HLD_idle_reset_timer = 0.0;
-	// initialize command type I timer
-	w->command_typeIII_timer = 0.0;
-	// add appropriate time based on E flag 15,000 us
-	if(w->delay15ms) {w->command_typeII_timer += 15*1000;}
+
+	if(w->HLD_pin == 0) {
+		// set HLD pin
+		w->HLT_timer_active = 1;
+		w->HLT_timer = 0.0;
+		w->HLD_pin = 1;
+		// one shot from HLD pin resets HLT pin
+		w->HLT_pin = 0;
+		w->HLD_idle_reset_timer = 0.0;
+	}
 }
 
 void setupForcedIntCommand(JWD1797* w) {
@@ -1033,8 +1086,8 @@ char* diskImageToCharArray(char* fileName, JWD1797* w) {
 	return diskFileArray;
 }
 
-// returns byte pointer to get a certain byte from the disk image file to start at
-int getDiskFileBytePointer(JWD1797* w) {
+// returns the desired target byte to start at when reading/writing a sector
+int getTargetDiskFileByte(JWD1797* w) {
 	int return_value = 0;
 	// check side (head) -  if SSO == 1 -- side (head) = 2
 	if(w->sso_pin) {
@@ -1045,4 +1098,16 @@ int getDiskFileBytePointer(JWD1797* w) {
 	// which sector? (sector numbers start at 1)
 	return_value += ((w->sectorRegister - 1) * w->sector_length);
 	return return_value;
+}
+
+//*** CONTINUE THIS&&&&
+/* gets the ID field information for the current disk image index if the index
+	is at the start of the sector. If the index is not at the start of the sector,
+	advance the index pointer to the next sector start index. */
+int getNextIDField(JWD1797* w) {
+	int startOfSector = 0;
+	// advance pointer to the start of the sector
+	// while(w->disk_img_index_pointer % 512 != 0) {
+	// 	w->disk_img_index_pointer++;
+	// }
 }

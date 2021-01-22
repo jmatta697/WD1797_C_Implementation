@@ -146,4 +146,4 @@ void handleIndexPulse(JWD1797*, double);
 void handleHLDIdle(JWD1797*, double);
 void handleHLTTimer(JWD1797*, double);
 char* diskImageToCharArray(char*, JWD1797*);
-int getDiskFileBytePointer(JWD1797*);
+int getTargetDiskFileByte(JWD1797*);
