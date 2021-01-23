@@ -21,9 +21,10 @@ int main(int argc, char* argv[]) {
   /* simulate various instruction timings by picking randomly from this list
     these timings are in microseconds */
   double instruction_times[7] = {0.8, 1.6, 1.0, 1.2, 2.6, 2.8, 4.0};
-  // seed random number generator
+  // seed random number generator with Epoch time
   srand(time(NULL));
 
+  getRandomTrackByte(jwd1797);
   /* tests that the WD1797 is receiving and processing incoming instruction
     timings by using a master clock only for testing */
   // masterClockTest(jwd1797, instruction_times);
@@ -41,7 +42,7 @@ int main(int argc, char* argv[]) {
   // STEP-IN command test
   // stepInCommandTest(jwd1797, instruction_times);
   // STEP-OUT command test
-  stepOutCommandTest(jwd1797, instruction_times);
+  // stepOutCommandTest(jwd1797, instruction_times);
   // READ SECTOR command test
   // readSectorTest(jwd1797, instruction_times);
 

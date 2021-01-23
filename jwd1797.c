@@ -333,7 +333,7 @@ void commandStep(JWD1797* w, double us) {
 						w->direction_pin = 0;
 						w->current_track--;
 						// step the disk image index down track bytes
-						w->disk_img_index_pointer -= (w->sector_length * w->sectors_per_track);
+						// w->disk_img_index_pointer -= (w->sector_length * w->sectors_per_track);
 						// reset step timer
 						w->step_timer = 0.0;
 					}
@@ -354,7 +354,7 @@ void commandStep(JWD1797* w, double us) {
 						w->direction_pin = 0;
 						w->current_track--;
 						// step the disk image index down track bytes
-						w->disk_img_index_pointer -= (w->sector_length * w->sectors_per_track);
+						// w->disk_img_index_pointer -= (w->sector_length * w->sectors_per_track);
 						// update track register with current track
 						w->trackRegister = w->current_track;
 						// reset step timer
@@ -367,7 +367,7 @@ void commandStep(JWD1797* w, double us) {
 						w->direction_pin = 1;
 						w->current_track++;
 						// step the disk image index up track bytes
-						w->disk_img_index_pointer += (w->sector_length * w->sectors_per_track);
+						// w->disk_img_index_pointer += (w->sector_length * w->sectors_per_track);
 						// update track register with current track
 						w->trackRegister = w->current_track;
 						// reset step timer
@@ -401,11 +401,11 @@ void commandStep(JWD1797* w, double us) {
 						// step track according to direction_pin
 						if(w->direction_pin == 0) {
 							w->current_track--;
-							w->disk_img_index_pointer -= (w->sector_length * w->sectors_per_track);
+							// w->disk_img_index_pointer -= (w->sector_length * w->sectors_per_track);
 						}
 						else if(w->direction_pin == 1) {
 							w->current_track++;
-							w->disk_img_index_pointer += (w->sector_length * w->sectors_per_track);
+							// w->disk_img_index_pointer += (w->sector_length * w->sectors_per_track);
 						}
 						// update track register if track update flag is high
 						if(w->trackUpdateFlag) {w->trackRegister = w->current_track;}
@@ -431,7 +431,7 @@ void commandStep(JWD1797* w, double us) {
 				if(w->step_timer >= (w->stepRate*1000)) {
 					// step track according to direction_pin
 					w->current_track++;
-					w->disk_img_index_pointer += (w->sector_length * w->sectors_per_track);
+					// w->disk_img_index_pointer += (w->sector_length * w->sectors_per_track);
 					// update track register if track update flag is high
 					if(w->trackUpdateFlag) {w->trackRegister = w->current_track;}
 					// reset step timer
@@ -458,7 +458,7 @@ void commandStep(JWD1797* w, double us) {
 					if(w->step_timer >= (w->stepRate*1000)) {
 						// step track according to direction_pin
 						w->current_track--;
-						w->disk_img_index_pointer -= (w->sector_length * w->sectors_per_track);
+						// w->disk_img_index_pointer -= (w->sector_length * w->sectors_per_track);
 						// update track register if track update flag is high
 						if(w->trackUpdateFlag) {w->trackRegister = w->current_track;}
 						// reset step timer
@@ -549,12 +549,23 @@ void commandStep(JWD1797* w, double us) {
 		if(w->HLT_pin == 0) {return;}
 		updateTG43Signal(w);
 
+		// ****
+		/* get a random byte from the current actual track (w->current_track)
+		 	we don't know what byte the head will be over when we start to execute
+		 	the READ SECTOR command */
+		unsigned long random_track_byte = getRandomTrackByte(w);
+		// is the random byte index at the beginning of the track?
+		int track_start_byte = isTrackStartByte(w, random_track_byte);
+		// is the byte index at the beginning of a sector?
+		// int sector_start_byte = isSectorStartByte(w, random_track_byte);
+
 		// *** REVAMP THIS set start byte for reading/writing if not set already
 		if(!w->start_byte_set) {
 			w->disk_img_index_pointer = getTargetDiskFileByte(w);
 			w->start_byte_set = 1;
 			w->rw_start_byte = w->disk_img_index_pointer;
 		}
+		// ****
 
 		// READ SECTOR
 		if(w->currentCommandName == "READ SECTOR") {
@@ -633,7 +644,7 @@ void commandStep(JWD1797* w, double us) {
 		updateTG43Signal(w);
 
 		if(w->currentCommandName == "READ ADDRESS") {
-			printf("%s%d\n", "Current disk image index pointer: ",
+			printf("%s%lu", "Current disk image index pointer: ",
 				w->disk_img_index_pointer);
 		}
 
@@ -1087,8 +1098,8 @@ char* diskImageToCharArray(char* fileName, JWD1797* w) {
 }
 
 // returns the desired target byte to start at when reading/writing a sector
-int getTargetDiskFileByte(JWD1797* w) {
-	int return_value = 0;
+unsigned long getTargetDiskFileByte(JWD1797* w) {
+	unsigned long return_value = 0;
 	// check side (head) -  if SSO == 1 -- side (head) = 2
 	if(w->sso_pin) {
 		return_value += (w->sector_length * w->sectors_per_track * w->cylinders);
@@ -1111,3 +1122,34 @@ int getNextIDField(JWD1797* w) {
 	// 	w->disk_img_index_pointer++;
 	// }
 }
+
+/* get number from 0 to MAX byte index on current track position
+	(for example: for an IBM 360K the range track 0 will be 0-4607
+	(9 sectors * 512 bytes)). Track 1 will be in the range 4608-9215...
+	and so on... */
+unsigned long getRandomTrackByte(JWD1797* w) {
+	// get random number from 0 to MAX track byte (ie. first sector data bytes)
+	int random_tr00_byte = rand() % (w->sectors_per_track * w->sector_length);
+	/* get track multiplier - this will be added to the track 0 byte to account
+		for the head track position (w->current_track) */
+	unsigned long track_factor = (w->sectors_per_track * w->sector_length) * w->current_track;
+	/* add track factor to random track 0 byte to get a random byte on the current
+		track */
+	unsigned long return_byte_index = random_tr00_byte + track_factor;
+	return return_byte_index;
+}
+
+/* determines if the disk image byte index correspnds to the start byte of a
+	track. Returns 1 if it is a track start byte, 0 if not. */
+int isTrackStartByte(JWD1797* w, unsigned long byte_index) {
+	if((byte_index % (w->sectors_per_track * w->sector_length)) == 0) {
+		return 1;
+	}
+	return 0;
+}
+
+/* determines if the disk image byte index correspnds to the start byte of a
+	sector. Returns 1 if it is a sector start byte, 0 if not. */
+// int isSectorStartByte(JWD1797* w, unsigned long byte_index) {
+//
+// }

@@ -116,8 +116,8 @@ int sectors_per_track;
 int sector_length;
 
 // keep track of current byte being pointed to by the READ/WRITE head
-int disk_img_index_pointer;
-int rw_start_byte;
+unsigned long disk_img_index_pointer;
+unsigned long rw_start_byte;
 
 
 } JWD1797;
@@ -146,4 +146,7 @@ void handleIndexPulse(JWD1797*, double);
 void handleHLDIdle(JWD1797*, double);
 void handleHLTTimer(JWD1797*, double);
 char* diskImageToCharArray(char*, JWD1797*);
-int getTargetDiskFileByte(JWD1797*);
+unsigned long getTargetDiskFileByte(JWD1797*);
+int getNextIDField(JWD1797* w);
+unsigned long getRandomTrackByte(JWD1797* w);
+int isTrackStartByte(JWD1797* w, unsigned long byte_index);
