@@ -37,6 +37,48 @@
 	where the 5.25" DS/DD disk is reported to have a 300 kbps data rate. */
 #define ASSEMBLE_DATA_BYTE_LIMIT 26.67	// ~ 3.33375 us/bit
 
+// DOS disk format (bytes per format section and byte written for each section)
+#define GAP4A_LENGTH 80
+#define GAP4A_BYTE 0x4E
+
+#define SYNC_LENGTH 12
+#define SYNC_BYTE 0x00
+
+#define INDEX_AM_PREFIX_LENGTH 3
+#define INDEX_AM_PREFIX_BYTE 0xC2
+#define INDEX_AM_LENGTH 1
+#define INDEX_AM_BYTE 0xFC
+
+#define GAP1_LENGTH 50
+#define GAP1_BYTE 0x4E
+
+#define ID_AM_PREFIX_LENGTH 3
+#define ID_AM_PREFIX_BYTE 0xA1
+#define ID_AM_LENGTH 1
+#define ID_AM_BYTE 0xFE
+
+#define CYLINDER_LENGTH 1
+#define HEAD_LENGTH 1
+#define SECTOR_LENGTH 1
+#define SECTOR_SIZE_LENGTH 1
+
+#define CRC_LENGTH 2
+#define CRC_BYTE 0x01	// PLACEHOLDER; CRC is not actually calulated or written
+
+#define GAP2_LENGTH 22
+#define GAP2_BYTE 0x4E
+
+#define DATA_AM_PREFIX_LENGTH 3
+#define DATA_AM_PREFIX_BYTE 0xA1
+#define DATA_AM_LENGTH 1
+#define DATA_AM_BYTE 0xFB
+
+#define GAP3_LENGTH 54
+#define GAP3_BYTE 0x4E
+
+#define GAP4B_LENGTH 598
+#define GAP4B_BYTE 0x4E
+
 // extern e8259_t* e8259_slave;
 
 char* disk_content_array;
@@ -127,12 +169,25 @@ void resetJWD1797(JWD1797* jwd_controller) {
 
 	jwd_controller->current_track = 0;
 
+	jwd_controller->cylinders = 0; // (tracks per side)
+	jwd_controller->num_heads = 0;
+	jwd_controller->sectors_per_track = 0;
+	jwd_controller->sector_length = 0;
+
+	jwd_controller->disk_img_file_size = 0;
+
+	jwd_controller->formattedDiskArray = NULL;
+
 	jwd_controller->disk_img_index_pointer = 0;
 	jwd_controller->rw_start_byte = 0;
 
-	disk_content_array = diskImageToCharArray("z-dos-1.img", jwd_controller);
+	// disk_content_array = diskImageToCharArray("z-dos-1.img", jwd_controller);
 	// TEST disk image to array function
 	// printByteArray(disk_content_array, 368640);
+
+	/* make a formatted disk array from the disk data payload image file.
+	 	will be held in jwd_controller->formattedDiskArray */
+	assembleFormattedDiskArray(jwd_controller, "z-dos-1.img");
 }
 
 // read data from wd1797 according to port
@@ -548,16 +603,6 @@ void commandStep(JWD1797* w, double us) {
 		// sample HLT pin - do not continue with command if HLT pin has not engaged
 		if(w->HLT_pin == 0) {return;}
 		updateTG43Signal(w);
-
-		// ****
-		/* get a random byte from the current actual track (w->current_track)
-		 	we don't know what byte the head will be over when we start to execute
-		 	the READ SECTOR command */
-		unsigned long random_track_byte = getRandomTrackByte(w);
-		// is the random byte index at the beginning of the track?
-		int track_start_byte = isTrackStartByte(w, random_track_byte);
-		// is the byte index at the beginning of a sector?
-		// int sector_start_byte = isSectorStartByte(w, random_track_byte);
 
 		// *** REVAMP THIS set start byte for reading/writing if not set already
 		if(!w->start_byte_set) {
@@ -1079,20 +1124,25 @@ char* diskImageToCharArray(char* fileName, JWD1797* w) {
 			THIS SHOULD BE DYNAMIC! ***
 			How do we extract these values form the disk data? *** */
 	w->cylinders = 40;	// 0-39
-	w->sectors_per_track = 9;	// 1-9
-	w->sector_length = 512;	// 0-511
+	w->num_heads = 2;	// 0-1
+	w->sectors_per_track = 9;	// 1-9 (sectors start on 1)
+	w->sector_length = 512;	// bytes 0-511
 	/* */
 	// obtain disk size
 	fseek(disk_img, 0, SEEK_END);
-	diskFileSize = ftell(disk_img);
+	w->disk_img_file_size = ftell(disk_img);
 	rewind(disk_img);
 	// allocate memory to handle array for entire disk image
-	diskFileArray = (char*) malloc(sizeof(char) * diskFileSize);
+	diskFileArray = (char*) malloc(sizeof(char) * w->disk_img_file_size);
 	/* copy disk image file into array buffer
 		("result" variable makes sure all expected bytes are copied) */
-	check_result = fread(diskFileArray, 1, diskFileSize, disk_img);
-	if(check_result != diskFileSize) {printf("%s\n\n", "ERROR Converting disk image");}
-	else {printf("%s\n\n", "disk image file converted to char array successfully!");}
+	check_result = fread(diskFileArray, 1, w->disk_img_file_size, disk_img);
+	if(check_result != w->disk_img_file_size) {
+		printf("%s\n\n", "ERROR Converting disk image");
+	}
+	else {
+		printf("%s\n\n", "disk image file converted to char array successfully!");
+	}
 	fclose(disk_img);
 	return diskFileArray;
 }
@@ -1111,45 +1161,169 @@ unsigned long getTargetDiskFileByte(JWD1797* w) {
 	return return_value;
 }
 
-//*** CONTINUE THIS&&&&
-/* gets the ID field information for the current disk image index if the index
-	is at the start of the sector. If the index is not at the start of the sector,
-	advance the index pointer to the next sector start index. */
-int getNextIDField(JWD1797* w) {
-	int startOfSector = 0;
-	// advance pointer to the start of the sector
-	// while(w->disk_img_index_pointer % 512 != 0) {
-	// 	w->disk_img_index_pointer++;
-	// }
-}
+/* establishes a char array (w->formattedDiskArray) that contains the (IBM)
+	format bytes and the disk .img data bytes. The returned array will approximate
+	the actual bytes on a 5.25" DS/DD (double side/double density) 360KB floppy
+	disk */
+void assembleFormattedDiskArray(JWD1797* w, char* fileName) {
+	// first, get the payload byte data from the disk image file as an array
+	char* sectorPayloadDataBytes = diskImageToCharArray(fileName, w);
+	/* determine the total number of bytes the raw disk byte array will be */
+	// first get the length of the total data payload bytes extracted from the disk image
+	long num_payload_bytes = w->disk_img_file_size;
+	// now, get the total amount of bytes for the entire formatted disk
+	long formatted_disk_size = (w->cylinders * 2) * (GAP4A_LENGTH + SYNC_LENGTH
+		+ INDEX_AM_PREFIX_LENGTH + INDEX_AM_LENGTH + GAP1_LENGTH
+		+ (w->sectors_per_track * (SYNC_LENGTH + ID_AM_PREFIX_LENGTH
+		+ ID_AM_LENGTH + CYLINDER_LENGTH + HEAD_LENGTH + SECTOR_LENGTH
+		+ SECTOR_SIZE_LENGTH + CRC_LENGTH + GAP2_LENGTH + SYNC_LENGTH
+		+ DATA_AM_PREFIX_LENGTH + DATA_AM_LENGTH + CRC_LENGTH
+		+ GAP3_LENGTH)) + GAP4B_LENGTH) + num_payload_bytes;
+	// printf("%lu\n", formatted_disk_size/80);
+	char fDiskArray[formatted_disk_size];
+	w->formattedDiskArray = fDiskArray;
+	long formattedDiskIndexPointer = 0;
+	long sectorPayloadArrayIndexPointer = 0;
+	// start making disk
 
-/* get number from 0 to MAX byte index on current track position
-	(for example: for an IBM 360K the range track 0 will be 0-4607
-	(9 sectors * 512 bytes)). Track 1 will be in the range 4608-9215...
-	and so on... */
-unsigned long getRandomTrackByte(JWD1797* w) {
-	// get random number from 0 to MAX track byte (ie. first sector data bytes)
-	int random_tr00_byte = rand() % (w->sectors_per_track * w->sector_length);
-	/* get track multiplier - this will be added to the track 0 byte to account
-		for the head track position (w->current_track) */
-	unsigned long track_factor = (w->sectors_per_track * w->sector_length) * w->current_track;
-	/* add track factor to random track 0 byte to get a random byte on the current
-		track */
-	unsigned long return_byte_index = random_tr00_byte + track_factor;
-	return return_byte_index;
-}
+	// for each side (head)
+	for(int h = 0; h < w->num_heads; h++) {
 
-/* determines if the disk image byte index correspnds to the start byte of a
-	track. Returns 1 if it is a track start byte, 0 if not. */
-int isTrackStartByte(JWD1797* w, unsigned long byte_index) {
-	if((byte_index % (w->sectors_per_track * w->sector_length)) == 0) {
-		return 1;
-	}
-	return 0;
-}
+		// for each track
+		for(int t = 0; t < w->cylinders; t++) {
 
-/* determines if the disk image byte index correspnds to the start byte of a
-	sector. Returns 1 if it is a sector start byte, 0 if not. */
-// int isSectorStartByte(JWD1797* w, unsigned long byte_index) {
-//
-// }
+			// write GAP4A
+			for(int ct = 0; ct < GAP4A_LENGTH; ct++) {
+				// write GAP4A_BYTE
+				w->formattedDiskArray[formattedDiskIndexPointer] = GAP4A_BYTE;
+				formattedDiskIndexPointer++;
+			}
+			// write SYNC
+			for(int ct = 0; ct < SYNC_LENGTH; ct++) {
+				// write GAP4A_BYTE
+				w->formattedDiskArray[formattedDiskIndexPointer] = SYNC_BYTE;
+				formattedDiskIndexPointer++;
+			}
+			// write IAM prefix
+			for(int ct = 0; ct < INDEX_AM_PREFIX_LENGTH; ct++) {
+				// write GAP4A_BYTE
+				w->formattedDiskArray[formattedDiskIndexPointer] = INDEX_AM_PREFIX_BYTE;
+				formattedDiskIndexPointer++;
+			}
+			// write IAM
+			w->formattedDiskArray[formattedDiskIndexPointer] = INDEX_AM_BYTE;
+			formattedDiskIndexPointer++;
+			// write GAP1
+			for(int ct = 0; ct < GAP1_LENGTH; ct++) {
+				// write GAP1_BYTE
+				w->formattedDiskArray[formattedDiskIndexPointer] = GAP1_BYTE;
+				formattedDiskIndexPointer++;
+			}
+
+			// for each sector
+			for(int s = 1; s < w->sectors_per_track + 1; s++) {
+				// write SYNC
+				for(int ct = 0; ct < SYNC_LENGTH; ct++) {
+					// write SYNC
+					w->formattedDiskArray[formattedDiskIndexPointer] = SYNC_BYTE;
+					formattedDiskIndexPointer++;
+				}
+				// write IDAM prefix
+				for(int ct = 0; ct < ID_AM_PREFIX_LENGTH; ct++) {
+					// write IDAM prefix byte
+					w->formattedDiskArray[formattedDiskIndexPointer] = ID_AM_PREFIX_BYTE;
+					formattedDiskIndexPointer++;
+				}
+				// write IDAM byte
+				w->formattedDiskArray[formattedDiskIndexPointer] = ID_AM_BYTE;
+				formattedDiskIndexPointer++;
+				// write cylinder byte (track)
+				w->formattedDiskArray[formattedDiskIndexPointer] = t;
+				formattedDiskIndexPointer++;
+				// write head byte (side)
+				w->formattedDiskArray[formattedDiskIndexPointer] = h;
+				formattedDiskIndexPointer++;
+				// write sector byte
+				w->formattedDiskArray[formattedDiskIndexPointer] = s;
+				formattedDiskIndexPointer++;
+				// write sector length byte
+				int s_length_byte = 0x00;
+				switch (w->sector_length) {
+					case 128:
+						s_length_byte = 0x00;
+						break;
+					case 256:
+						s_length_byte = 0x01;
+						break;
+					case 512:
+						s_length_byte = 0x02;
+						break;
+					case 1024:
+						s_length_byte = 0x03;
+						break;
+					default:
+						printf("%s\n", "ERROR: Non-standard sector length!");
+				}
+				w->formattedDiskArray[formattedDiskIndexPointer] = s_length_byte;
+				formattedDiskIndexPointer++;
+				// write 2 placeholder CRC bytes (0x01 X 2)
+				for(int ct = 0; ct < CRC_LENGTH; ct++) {
+					w->formattedDiskArray[formattedDiskIndexPointer] = CRC_BYTE;
+					formattedDiskIndexPointer++;
+				}
+				// write GAP2
+				for(int ct = 0; ct < GAP2_LENGTH; ct++) {
+					// write GAP2_BYTE
+					w->formattedDiskArray[formattedDiskIndexPointer] = GAP2_BYTE;
+					formattedDiskIndexPointer++;
+				}
+				// write SYNC
+				for(int ct = 0; ct < SYNC_LENGTH; ct++) {
+					// write GAP4A_BYTE
+					w->formattedDiskArray[formattedDiskIndexPointer] = SYNC_BYTE;
+					formattedDiskIndexPointer++;
+				}
+				// write DATA AM prefix
+				for(int ct = 0; ct < DATA_AM_PREFIX_LENGTH; ct++) {
+					// write DATA AM prefix byte
+					w->formattedDiskArray[formattedDiskIndexPointer] = DATA_AM_PREFIX_BYTE;
+					formattedDiskIndexPointer++;
+				}
+				// write DATA AM byte
+				w->formattedDiskArray[formattedDiskIndexPointer] = DATA_AM_BYTE;
+				formattedDiskIndexPointer++;
+				// write appropriate data payload
+				for(int ct = 0; ct < w->sector_length; ct++) {
+					w->formattedDiskArray[formattedDiskIndexPointer] =
+						sectorPayloadDataBytes[sectorPayloadArrayIndexPointer];
+					formattedDiskIndexPointer++;
+					sectorPayloadArrayIndexPointer++;
+				}
+				// write 2 placeholder CRC bytes (0x01 X 2)
+				for(int ct = 0; ct < CRC_LENGTH; ct++) {
+					w->formattedDiskArray[formattedDiskIndexPointer] = CRC_BYTE;
+					formattedDiskIndexPointer++;
+				}
+				// write GAP3
+				for(int ct = 0; ct < GAP3_LENGTH; ct++) {
+					// write GAP3_BYTE
+					w->formattedDiskArray[formattedDiskIndexPointer] = GAP3_BYTE;
+					formattedDiskIndexPointer++;
+				}
+
+			}	// END SECTOR LOOP
+
+			// write GAP 4B
+			for(int ct = 0; ct < GAP4B_LENGTH; ct++) {
+				// write GAP4B_BYTE
+				w->formattedDiskArray[formattedDiskIndexPointer] = GAP4B_BYTE;
+				formattedDiskIndexPointer++;
+			}
+
+		} // END TRACK LOOP
+
+	} // END SIDE LOOP
+
+ 	// printByteArray(w->formattedDiskArray, 1500);
+
+}

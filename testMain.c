@@ -24,7 +24,8 @@ int main(int argc, char* argv[]) {
   // seed random number generator with Epoch time
   srand(time(NULL));
 
-  getRandomTrackByte(jwd1797);
+  // assembleFormattedDiskArray(jwd1797, "z-dos-1.img");
+
   /* tests that the WD1797 is receiving and processing incoming instruction
     timings by using a master clock only for testing */
   // masterClockTest(jwd1797, instruction_times);
@@ -45,7 +46,6 @@ int main(int argc, char* argv[]) {
   // stepOutCommandTest(jwd1797, instruction_times);
   // READ SECTOR command test
   // readSectorTest(jwd1797, instruction_times);
-
 
   return 0;
 }

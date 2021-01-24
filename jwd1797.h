@@ -112,8 +112,13 @@ int not_master_reset; /* if this pin goes low for at least 50us, 0b00000011
 int current_track;
 
 int cylinders; // (tracks per side)
+int num_heads; // WD1797 has two read heads, one for each side of the disk
 int sectors_per_track;
 int sector_length;
+
+long disk_img_file_size;
+
+char* formattedDiskArray;
 
 // keep track of current byte being pointed to by the READ/WRITE head
 unsigned long disk_img_index_pointer;
@@ -147,6 +152,4 @@ void handleHLDIdle(JWD1797*, double);
 void handleHLTTimer(JWD1797*, double);
 char* diskImageToCharArray(char*, JWD1797*);
 unsigned long getTargetDiskFileByte(JWD1797*);
-int getNextIDField(JWD1797* w);
-unsigned long getRandomTrackByte(JWD1797* w);
-int isTrackStartByte(JWD1797* w, unsigned long byte_index);
+void assembleFormattedDiskArray(JWD1797*, char*);
