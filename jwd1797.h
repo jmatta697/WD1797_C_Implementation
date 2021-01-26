@@ -72,6 +72,7 @@ double step_timer;
 double verify_head_settling_timer;
 double e_delay_timer;
 double assemble_data_byte_timer;
+double rotational_byte_read_timer;
 double command_typeII_timer;
 double command_typeIII_timer;
 double command_typeIV_timer;
@@ -119,9 +120,11 @@ int sector_length;
 long disk_img_file_size;
 
 char* formattedDiskArray;
+int actual_num_track_bytes;
 
 // keep track of current byte being pointed to by the READ/WRITE head
 unsigned long disk_img_index_pointer;
+unsigned long rotational_byte_pointer;
 unsigned long rw_start_byte;
 
 
@@ -153,3 +156,4 @@ void handleHLTTimer(JWD1797*, double);
 char* diskImageToCharArray(char*, JWD1797*);
 unsigned long getTargetDiskFileByte(JWD1797*);
 void assembleFormattedDiskArray(JWD1797*, char*);
+unsigned long getRandomRotationalByte(JWD1797*);

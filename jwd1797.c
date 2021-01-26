@@ -35,7 +35,8 @@
 /* time limit for data shift register to assemble byte in data register
 	(simulated). This value is based on 'https://www.hp9845.net/9845/projects/fdio/#hp_formats'
 	where the 5.25" DS/DD disk is reported to have a 300 kbps data rate. */
-#define ASSEMBLE_DATA_BYTE_LIMIT 26.67	// ~ 3.33375 us/bit
+// #define ASSEMBLE_DATA_BYTE_LIMIT 26.67	// ~ 3.33375 us/bit
+#define ROTATIONAL_BYTE_READ_LIMIT 30.0	// ~ 3.9 us/bit
 
 // DOS disk format (bytes per format section and byte written for each section)
 #define GAP4A_LENGTH 80
@@ -144,6 +145,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->verify_head_settling_timer = 0.0;
 	jwd_controller->e_delay_timer = 0.0;
 	jwd_controller->assemble_data_byte_timer = 0.0;
+	jwd_controller->rotational_byte_read_timer = 0.0;
 	jwd_controller->command_typeII_timer = 0.0;
 	jwd_controller->command_typeIII_timer = 0.0;
 	jwd_controller->command_typeIV_timer = 0.0;
@@ -177,8 +179,11 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->disk_img_file_size = 0;
 
 	jwd_controller->formattedDiskArray = NULL;
+	jwd_controller->actual_num_track_bytes = 0;
 
 	jwd_controller->disk_img_index_pointer = 0;
+	// jwd_controller->rotational_byte_pointer = getRandomRotationalByte(jwd_controller);
+	jwd_controller->rotational_byte_pointer = 0;
 	jwd_controller->rw_start_byte = 0;
 
 	// disk_content_array = diskImageToCharArray("z-dos-1.img", jwd_controller);
@@ -286,6 +291,18 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 	// check track and set not_track00_pin accordingly
 	if(w->current_track == 0) {w->not_track00_pin = 0;}
 	else {w->not_track00_pin = 1;}
+
+	// clock the rotational byte timer
+	w->rotational_byte_read_timer += us;
+	// is it time to advance to the next rotational byte?
+	if(w->rotational_byte_read_timer >= ROTATIONAL_BYTE_READ_LIMIT) {
+		// advance to next rotational byte (go to 0 if back to start of track)
+		w->rotational_byte_pointer =
+			(w->rotational_byte_pointer + 1) % w->actual_num_track_bytes;
+		// printf("%lu\n", w->rotational_byte_pointer);
+		// reset timer
+		w->rotational_byte_read_timer = 0.0;
+	}
 
 	handleIndexPulse(w, us);
 
@@ -616,7 +633,7 @@ void commandStep(JWD1797* w, double us) {
 		if(w->currentCommandName == "READ SECTOR") {
 			w->assemble_data_byte_timer += us;	// clock byte read timer
 			// did the timer expire?
-			if(w->assemble_data_byte_timer >= ASSEMBLE_DATA_BYTE_LIMIT) {
+			if(w->assemble_data_byte_timer >= ROTATIONAL_BYTE_READ_LIMIT) {
 				/* did computer read the last data byte in the DR? If DRQ is still high,
 					it did not; set lost data bit in status */
 				if(w->drq) {w->statusRegister |= 0b00000100;}
@@ -1057,25 +1074,41 @@ void printCommandFlags(JWD1797* w) {
 }
 
 void handleIndexPulse(JWD1797* w, double time) {
-	w->index_encounter_timer += time;
+	// printf("%s%lu\n", "Rotational byte ptr: ", w->rotational_byte_pointer);
 	// only increment index pulse timer if index pulse is high (1)
-	if(w->index_pulse_pin) {w->index_pulse_timer += time;}
-
-	if(!w->index_pulse_pin && w->index_encounter_timer >= INDEX_HOLE_ENCOUNTER_US) {
+	// if(w->index_pulse_pin) {w->index_pulse_timer += time;}
+	// if the rotational byte pointer is at 0 start index pulse
+	if(w->rotational_byte_pointer == 0) {
 		w->index_pulse_pin = 1;
 		// set IP status if TYPE I command is active
 		if(w->currentCommandType == 1) {w->statusRegister |= 0b00000010;}
-		// reset index hole encounter timer
-		w->index_encounter_timer = 0.0;
 	}
-	// check index pulse timer
-	if(w->index_pulse_pin && w->index_pulse_timer >= INDEX_HOLE_PULSE_US) {
+	else {
 		w->index_pulse_pin = 0;
 		// clear IP status if TYPE I command is active
 		if(w->currentCommandType == 1) {w->statusRegister &= 0b11111101;}
-		// reset index pulse timer
-		w->index_pulse_timer = 0.0;
 	}
+
+
+	// w->index_encounter_timer += time;
+	// // only increment index pulse timer if index pulse is high (1)
+	// if(w->index_pulse_pin) {w->index_pulse_timer += time;}
+	//
+	// if(!w->index_pulse_pin && w->index_encounter_timer >= INDEX_HOLE_ENCOUNTER_US) {
+	// 	w->index_pulse_pin = 1;
+	// 	// set IP status if TYPE I command is active
+	// 	if(w->currentCommandType == 1) {w->statusRegister |= 0b00000010;}
+	// 	// reset index hole encounter timer
+	// 	w->index_encounter_timer = 0.0;
+	// }
+	// // check index pulse timer
+	// if(w->index_pulse_pin && w->index_pulse_timer >= INDEX_HOLE_PULSE_US) {
+	// 	w->index_pulse_pin = 0;
+	// 	// clear IP status if TYPE I command is active
+	// 	if(w->currentCommandType == 1) {w->statusRegister &= 0b11111101;}
+	// 	// reset index pulse timer
+	// 	w->index_pulse_timer = 0.0;
+	// }
 }
 
 void handleHLDIdle(JWD1797* w, double time) {
@@ -1171,15 +1204,24 @@ void assembleFormattedDiskArray(JWD1797* w, char* fileName) {
 	/* determine the total number of bytes the raw disk byte array will be */
 	// first get the length of the total data payload bytes extracted from the disk image
 	long num_payload_bytes = w->disk_img_file_size;
-	// now, get the total amount of bytes for the entire formatted disk
-	long formatted_disk_size = (w->cylinders * 2) * (GAP4A_LENGTH + SYNC_LENGTH
+	/* determine how many actual bytes (including format bytes) each track is
+		This will be used for rotational byte pointing while the disk is spinning */
+	w->actual_num_track_bytes = GAP4A_LENGTH + SYNC_LENGTH
 		+ INDEX_AM_PREFIX_LENGTH + INDEX_AM_LENGTH + GAP1_LENGTH
-		+ (w->sectors_per_track * (SYNC_LENGTH + ID_AM_PREFIX_LENGTH
+		+ (9 * (SYNC_LENGTH + ID_AM_PREFIX_LENGTH
 		+ ID_AM_LENGTH + CYLINDER_LENGTH + HEAD_LENGTH + SECTOR_LENGTH
 		+ SECTOR_SIZE_LENGTH + CRC_LENGTH + GAP2_LENGTH + SYNC_LENGTH
-		+ DATA_AM_PREFIX_LENGTH + DATA_AM_LENGTH + CRC_LENGTH
-		+ GAP3_LENGTH)) + GAP4B_LENGTH) + num_payload_bytes;
+		+ DATA_AM_PREFIX_LENGTH + DATA_AM_LENGTH + w->sector_length
+		+ CRC_LENGTH + GAP3_LENGTH)) + GAP4B_LENGTH;
+
+	// printf("%d\n", w->actual_num_track_bytes);
+
+	// now, get the total amount of bytes for the entire formatted disk
+	long formatted_disk_size = (w->cylinders * 2) * w->actual_num_track_bytes;
+
+	// printf("%lu\n", formatted_disk_size);
 	// printf("%lu\n", formatted_disk_size/80);
+
 	char fDiskArray[formatted_disk_size];
 	w->formattedDiskArray = fDiskArray;
 	long formattedDiskIndexPointer = 0;
@@ -1323,7 +1365,14 @@ void assembleFormattedDiskArray(JWD1797* w, char* fileName) {
 		} // END TRACK LOOP
 
 	} // END SIDE LOOP
-
+	/* * * DEBUG * * */
  	// printByteArray(w->formattedDiskArray, 1500);
+}
 
+/* returns a random byte fro the formatted disk track. This simulates how a
+	random byte will be seen first while the disk is spinning */
+unsigned long getRandomRotationalByte(JWD1797* w) {
+	/* get a random number between 0 - (number of actual bytes per formatted
+		track - 1) */
+	return rand() % w->actual_num_track_bytes;
 }

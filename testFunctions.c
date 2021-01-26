@@ -171,16 +171,22 @@ void indexPulseTest(JWD1797* jwd1797, double instr_times[]) {
 
     /* encounter index hole every ~200,000 microseconds - time for one
       full disk rotation at 300 RPM) */
-    if((jwd1797->master_timer >= 199990 && jwd1797->master_timer <= 200030) ||
-      (jwd1797->master_timer >= 399990 && jwd1797->master_timer <= 400030) ||
-      (jwd1797->master_timer >= 599990 && jwd1797->master_timer <= 600030)) {
-      sleep(1); // delay loop iteration for observation
+    if(jwd1797->rotational_byte_pointer >= 6394 ||
+      jwd1797->rotational_byte_pointer <= 2) {
+      usleep(500000); // delay loop iteration for observation
       printf("%s", "MASTER CLOCK: ");
       printf("%f\n", jwd1797->master_timer);
       printf("%s", "TYPE I STATUS REGISTER: ");
       print_bin8_representation(jwd1797->statusRegister);
       printf("%s\n", "");
     }
+
+    // sleep(1); // delay loop iteration for observation
+    // printf("%s", "MASTER CLOCK: ");
+    // printf("%f\n", jwd1797->master_timer);
+    // printf("%s", "TYPE I STATUS REGISTER: ");
+    // print_bin8_representation(jwd1797->statusRegister);
+    // printf("%s\n", "");
   }
 }
 
