@@ -36,7 +36,7 @@
 	(simulated). This value is based on 'https://www.hp9845.net/9845/projects/fdio/#hp_formats'
 	where the 5.25" DS/DD disk is reported to have a 300 kbps data rate. */
 // #define ASSEMBLE_DATA_BYTE_LIMIT 26.67	// ~ 3.33375 us/bit
-#define ROTATIONAL_BYTE_READ_LIMIT 30.0	// ~ 3.9 us/bit
+#define ROTATIONAL_BYTE_READ_LIMIT 30.1	// ~ 3.9 us/bit
 
 // DOS disk format (bytes per format section and byte written for each section)
 #define GAP4A_LENGTH 80
@@ -133,6 +133,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->command_action_done = 0;
 	jwd_controller->command_done = 0;
 	jwd_controller->head_settling_done = 0;
+	jwd_controller->verify_operation_done = 0;
 	jwd_controller->e_delay_done = 0;
 	jwd_controller->start_byte_set = 0;
 
@@ -185,6 +186,11 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	// jwd_controller->rotational_byte_pointer = getRandomRotationalByte(jwd_controller);
 	jwd_controller->rotational_byte_pointer = 0;
 	jwd_controller->rw_start_byte = 0;
+
+	jwd_controller->new_byte_read_signal_ = 0;
+
+	jwd_controller->zero_byte_counter = 0;
+	jwd_controller->a1_byte_counter = 0;
 
 	// disk_content_array = diskImageToCharArray("z-dos-1.img", jwd_controller);
 	// TEST disk image to array function
@@ -292,6 +298,8 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 	if(w->current_track == 0) {w->not_track00_pin = 0;}
 	else {w->not_track00_pin = 1;}
 
+	// reset new byte signal every WD1797 clock cycle
+	w->new_byte_read_signal_ = 0;
 	// clock the rotational byte timer
 	w->rotational_byte_read_timer += us;
 	// is it time to advance to the next rotational byte?
@@ -300,6 +308,9 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 		w->rotational_byte_pointer =
 			(w->rotational_byte_pointer + 1) % w->actual_num_track_bytes;
 		// printf("%lu\n", w->rotational_byte_pointer);
+		/* make new byte read signal (internal) go high. This signals that a new
+			rotational byte has been encountered */
+		w->new_byte_read_signal_ = 1;
 		// reset timer
 		w->rotational_byte_read_timer = 0.0;
 	}
@@ -549,6 +560,7 @@ void commandStep(JWD1797* w, double us) {
 		/* after all steps are done (reached track 00 in the case of RESTORE)
 			take care of post command varifications and delays */
 		else if(w->command_action_done) {
+
 			// take care of delayed HLD
 			if(w->delayed_HLD && w->HLD_pin == 0) {
 				w->HLT_timer_active = 1;
@@ -563,7 +575,7 @@ void commandStep(JWD1797* w, double us) {
 
 			// if NO headload or yes headload and no verify
 			if((!w->headLoadFlag || w->headLoadFlag) && !w->verifyFlag) {
-				// no 30 ms delay and HLT is not sampled - command is done
+				// no 30 ms verification delay and HLT is not sampled - command is done
 				w->command_done = 1;
 				w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
 				w->HLD_idle_reset_timer = 0.0;
@@ -589,15 +601,30 @@ void commandStep(JWD1797* w, double us) {
 					// is HLT pin high?
 					if(w->HLT_pin) {
 						// head settling time has passed and the HLT pin is high
-						// command is done
-						w->command_done = 1;
-						w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
-						w->HLD_idle_reset_timer = 0.0;
-						// assume verification operation is successful - generate interrupt
-						w->intrq = 1;
-						// e8259_set_irq0 (e8259_slave, 1);
-						// reset HLD idle timer
-						return;
+						// is there a verification operation pending?
+						if(w->verifyFlag) {
+							// do verification operation...
+							w->zero_byte_counter = 0; // look for four 0x00 bytes
+							w->a1_byte_counter = 0;	// look for three 0xA1 bytes
+							// look for 4 0x00 bytes
+							// have four 0x00 bytes been encountered?
+							if(w->new_byte_read_signal_) {	// new rotational byte is available
+								// is the byte 0x00?
+								// if()
+							}
+						}
+						// is verify operation done?
+						if(w->verify_operation_done) {
+							// command is done
+							w->command_done = 1;
+							w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+							w->HLD_idle_reset_timer = 0.0;
+							// assume verification operation is successful - generate interrupt
+							w->intrq = 1;
+							// e8259_set_irq0 (e8259_slave, 1);
+							// reset HLD idle timer
+							return;
+						}
 					}
 				}
 			}
@@ -623,7 +650,7 @@ void commandStep(JWD1797* w, double us) {
 
 		// *** REVAMP THIS set start byte for reading/writing if not set already
 		if(!w->start_byte_set) {
-			w->disk_img_index_pointer = getTargetDiskFileByte(w);
+			w->disk_img_index_pointer = 0;	// @@@ FIX THIS!!!
 			w->start_byte_set = 1;
 			w->rw_start_byte = w->disk_img_index_pointer;
 		}
@@ -729,6 +756,7 @@ void setupTypeICommand(JWD1797* w) {
 	w->command_done = 0;
 	w->head_settling_done = 0;
 	w->step_timer = 0.0;
+	w->verify_operation_done = 0;
 	// set appropriate status bits for type I command to start
 	typeIStatusReset(w);
 	// establish step rate options (in ms) for 1MHz clock (only used with TYPE I cmds)
@@ -1180,20 +1208,6 @@ char* diskImageToCharArray(char* fileName, JWD1797* w) {
 	return diskFileArray;
 }
 
-// returns the desired target byte to start at when reading/writing a sector
-unsigned long getTargetDiskFileByte(JWD1797* w) {
-	unsigned long return_value = 0;
-	// check side (head) -  if SSO == 1 -- side (head) = 2
-	if(w->sso_pin) {
-		return_value += (w->sector_length * w->sectors_per_track * w->cylinders);
-	}
-	// which track?
-	return_value += (w->trackRegister * (w->sector_length * w->sectors_per_track));
-	// which sector? (sector numbers start at 1)
-	return_value += ((w->sectorRegister - 1) * w->sector_length);
-	return return_value;
-}
-
 /* establishes a char array (w->formattedDiskArray) that contains the (IBM)
 	format bytes and the disk .img data bytes. The returned array will approximate
 	the actual bytes on a 5.25" DS/DD (double side/double density) 360KB floppy
@@ -1214,7 +1228,7 @@ void assembleFormattedDiskArray(JWD1797* w, char* fileName) {
 		+ DATA_AM_PREFIX_LENGTH + DATA_AM_LENGTH + w->sector_length
 		+ CRC_LENGTH + GAP3_LENGTH)) + GAP4B_LENGTH;
 
-	// printf("%d\n", w->actual_num_track_bytes);
+	printf("%d\n", w->actual_num_track_bytes);
 
 	// now, get the total amount of bytes for the entire formatted disk
 	long formatted_disk_size = (w->cylinders * 2) * w->actual_num_track_bytes;
@@ -1369,10 +1383,14 @@ void assembleFormattedDiskArray(JWD1797* w, char* fileName) {
  	// printByteArray(w->formattedDiskArray, 1500);
 }
 
-/* returns a random byte fro the formatted disk track. This simulates how a
-	random byte will be seen first while the disk is spinning */
-unsigned long getRandomRotationalByte(JWD1797* w) {
-	/* get a random number between 0 - (number of actual bytes per formatted
-		track - 1) */
-	return rand() % w->actual_num_track_bytes;
+/* returns the actual byte on the formatted disk (formatted disk array)
+	based on the rotational byte position, actual track (w->current_track),
+	and side select/head (w->sso_pin) */
+unsigned char getFDiskByte(JWD1797* w) {
+	// determine byte pointer on side 1 (head = 0)
+	long r_byte_pt = w->rotational_byte_pointer +
+		(w->current_track * w->actual_num_track_bytes);
+	// which head (side)?
+	r_byte_pt = r_byte_pt + (w->sso_pin * (w->actual_num_track_bytes * w->cylinders));
+	return w->formattedDiskArray[r_byte_pt];
 }

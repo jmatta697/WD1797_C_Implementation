@@ -58,6 +58,7 @@ int command_action_done;  // flag indicates if the command action is done
 int command_done; // flag indicating that entire command is done -
                   // including verification and delay -
 int head_settling_done;
+int verify_operation_done;
 int e_delay_done;
 int start_byte_set;
 int terminate_command;
@@ -127,6 +128,12 @@ unsigned long disk_img_index_pointer;
 unsigned long rotational_byte_pointer;
 unsigned long rw_start_byte;
 
+int new_byte_read_signal_;
+
+// verification operation
+int zero_byte_counter;
+int a1_byte_counter;	
+
 
 } JWD1797;
 
@@ -154,6 +161,5 @@ void handleIndexPulse(JWD1797*, double);
 void handleHLDIdle(JWD1797*, double);
 void handleHLTTimer(JWD1797*, double);
 char* diskImageToCharArray(char*, JWD1797*);
-unsigned long getTargetDiskFileByte(JWD1797*);
 void assembleFormattedDiskArray(JWD1797*, char*);
-unsigned long getRandomRotationalByte(JWD1797*);
+unsigned char getFDiskByte(JWD1797*);

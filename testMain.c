@@ -25,11 +25,7 @@ int main(int argc, char* argv[]) {
   srand(time(NULL));
 
   // assembleFormattedDiskArray(jwd1797, "z-dos-1.img");
-
-  // for(int i = 0; i < 100; i++) {
-  //   printf("%d\n", getRandomRotationalByte(jwd1797));
-  // }
-
+  getFByteTest(jwd1797, instruction_times);
   /* tests that the WD1797 is receiving and processing incoming instruction
     timings by using a master clock only for testing */
   // masterClockTest(jwd1797, instruction_times);

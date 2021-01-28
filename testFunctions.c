@@ -580,3 +580,23 @@ void seekTestPrintHelper(JWD1797* jwd1797) {
   printf("%s\n", "");
   printf("%s\n", "");
 }
+
+void getFByteTest(JWD1797* jwd1797, double instr_times[]) {
+  // adjust these for testing different conditions
+  jwd1797->current_track = 2;
+  jwd1797->sso_pin = 1;
+
+  for(int i = 0; i < 200000; i++) {
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+    // only print when a new byte is read
+    if(jwd1797->new_byte_read_signal_) {
+      printf("%s", "MASTER CLOCK: ");
+      printf("%f -- ", jwd1797->master_timer);
+      printf("%02X\n", getFDiskByte(jwd1797));
+      usleep(50000);
+    }
+  }
+}
