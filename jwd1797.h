@@ -58,6 +58,7 @@ int command_action_done;  // flag indicates if the command action is done
 int command_done; // flag indicating that entire command is done -
                   // including verification and delay -
 int head_settling_done;
+int verify_operation_active;
 int verify_operation_done;
 int e_delay_done;
 int start_byte_set;
@@ -93,6 +94,7 @@ int sso_pin;
 
 int delayed_HLD;
 int HLT_timer_active;
+int HLD_idle_index_count;
 
 // computer interface pins
 int drq;  /* also appears as status bit 1 during read/write operations. It is set
@@ -128,11 +130,21 @@ unsigned long disk_img_index_pointer;
 unsigned long rotational_byte_pointer;
 unsigned long rw_start_byte;
 
+// emulator internal
 int new_byte_read_signal_;
+int track_start_signal_;
 
 // verification operation
 int zero_byte_counter;
-int a1_byte_counter;	
+int a1_byte_counter;
+int verify_index_count;
+int address_mark_search_count;
+int index_id_field_found;
+int id_field_data_array_pt;
+/* collects ID Field data
+  (0: cylinders, 1: head, 2: sector, 3: sector len, 4: CRC1, 5: CRC2) */
+unsigned char id_field_data[6];
+
 
 
 } JWD1797;
@@ -158,7 +170,7 @@ void setTypeIIICommand(JWD1797*);
 void printBusyMsg();
 void updateTG43Signal(JWD1797*);
 void handleIndexPulse(JWD1797*, double);
-void handleHLDIdle(JWD1797*, double);
+void handleHLDIdle(JWD1797*);
 void handleHLTTimer(JWD1797*, double);
 char* diskImageToCharArray(char*, JWD1797*);
 void assembleFormattedDiskArray(JWD1797*, char*);

@@ -33,7 +33,7 @@ int main(int argc, char* argv[]) {
   // commandWriteTests(jwd1797);
   /* tests that the index hole pulse is being properly registered by the status
     register when a TYPE I command is being executed */
-  // indexPulseTest(jwd1797, instruction_times);
+  indexPulseTest(jwd1797, instruction_times);
   // restore command test
   // restoreCommandTest(jwd1797, instruction_times);
   // SEEK command test

@@ -21,11 +21,11 @@
 
 // ** ALL TIMINGS in microseconds **
 // an index hole is encountered every 0.2 seconds with a 300 RPM drive
-#define INDEX_HOLE_ENCOUNTER_US 200000
-// index hole pulses last for 20 microseconds (WD1797 docs)
-#define INDEX_HOLE_PULSE_US 20
+// #define INDEX_HOLE_ENCOUNTER_US 200000
+// index hole pulses should last for 20 microseconds (WD1797 docs)
+#define INDEX_HOLE_PULSE_US 40
 // when non-busy status and HLD high, reset HLD after 15 index pulses
-#define HLD_IDLE_RESET_LIMIT 15*INDEX_HOLE_ENCOUNTER_US
+#define HLD_IDLE_INDEX_COUNT_LIMIT 15
 // head load timing (this can be set from 30-100 ms, depending on drive)
 #define HEAD_LOAD_TIMING_LIMIT 45*1000	// set to 45 ms (45,000 us)
 // verify time is 30 milliseconds for a 1MHz clock
@@ -37,6 +37,10 @@
 	where the 5.25" DS/DD disk is reported to have a 300 kbps data rate. */
 // #define ASSEMBLE_DATA_BYTE_LIMIT 26.67	// ~ 3.33375 us/bit
 #define ROTATIONAL_BYTE_READ_LIMIT 30.1	// ~ 3.9 us/bit
+/* number of bytes after ID field search encounters four 0x00 bytes. This
+ 	should be 16 bytes according to WD-1797 docs. After 16 bytes the search
+	for the next ID field starts over. */
+#define ID_FIELD_SEARCH_LIMIT 16
 
 // DOS disk format (bytes per format section and byte written for each section)
 #define GAP4A_LENGTH 80
@@ -133,6 +137,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->command_action_done = 0;
 	jwd_controller->command_done = 0;
 	jwd_controller->head_settling_done = 0;
+	jwd_controller->verify_operation_active = 0;
 	jwd_controller->verify_operation_done = 0;
 	jwd_controller->e_delay_done = 0;
 	jwd_controller->start_byte_set = 0;
@@ -151,6 +156,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->command_typeIII_timer = 0.0;
 	jwd_controller->command_typeIV_timer = 0.0;
 	jwd_controller->HLD_idle_reset_timer = 0.0;
+	jwd_controller->HLD_idle_index_count = 0;
 	jwd_controller->HLT_timer = 0.0;
 
 	jwd_controller->index_pulse_pin = 0;
@@ -308,6 +314,14 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 		w->rotational_byte_pointer =
 			(w->rotational_byte_pointer + 1) % w->actual_num_track_bytes;
 		// printf("%lu\n", w->rotational_byte_pointer);
+		// when the last byte of the track is read, signal the start of the index pulse
+		if(w->rotational_byte_pointer == (w->actual_num_track_bytes - 1)) {
+			w->track_start_signal_ = 1;
+			// command execution idle - clock HLD idle index counter
+			if(w->statusRegister & 1 == 0) {w->HLD_idle_index_count++;}
+			// clock verify timeout counter
+			if(w->verify_operation_active) {w->verify_index_count++;}
+		}
 		/* make new byte read signal (internal) go high. This signals that a new
 			rotational byte has been encountered */
 		w->new_byte_read_signal_ = 1;
@@ -344,7 +358,7 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 		commandStep(w, us);
 	}
 	// HLD pin will reset if drive is not busy and 15 index pulses happen
-	handleHLDIdle(w, us);
+	handleHLDIdle(w);
 }
 
 /* WD1797 accepts 11 different commands - this function will register the
@@ -568,24 +582,25 @@ void commandStep(JWD1797* w, double us) {
 				w->HLD_pin = 1;
 				// one shot from HLD pin resets HLT pin
 				w->HLT_pin = 0;
-				w->HLD_idle_reset_timer = 0.0;
+				// w->HLD_idle_reset_timer = 0.0;
 				// reset delayed HLD flag
 				w->delayed_HLD = 0;
 			}
 
 			// if NO headload or yes headload and no verify
-			if((!w->headLoadFlag || w->headLoadFlag) && !w->verifyFlag) {
+			if(!w->verifyFlag) {
 				// no 30 ms verification delay and HLT is not sampled - command is done
 				w->command_done = 1;
 				w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
-				w->HLD_idle_reset_timer = 0.0;
+				// w->HLD_idle_reset_timer = 0.0;
 				// generate interrupt
 				w->intrq = 1;
 				// e8259_set_irq0 (e8259_slave, 1);
 				return;
 			}
-			// still waiting on verify head settling...
-			else if((!w->headLoadFlag || w->headLoadFlag) && w->verifyFlag) {
+
+			// VERIFY still waiting on verify head settling...
+			else if(w->verifyFlag) {
 				// if verify head settling has not occurred yet...
 				if(!w->head_settling_done) {
 					w->verify_head_settling_timer += us;
@@ -595,39 +610,103 @@ void commandStep(JWD1797* w, double us) {
 						w->verify_head_settling_timer = 0.0;
 						w->head_settling_done = 1;
 					}
-				}
+				}	// END verify head settling delay
+
 				// head settling time is done. Wait for HLT pin to go high if not already.
 				else if(w->head_settling_done) {
 					// is HLT pin high?
 					if(w->HLT_pin) {
 						// head settling time has passed and the HLT pin is high
-						// is there a verification operation pending?
-						if(w->verifyFlag) {
-							// do verification operation...
-							w->zero_byte_counter = 0; // look for four 0x00 bytes
-							w->a1_byte_counter = 0;	// look for three 0xA1 bytes
-							// look for 4 0x00 bytes
-							// have four 0x00 bytes been encountered?
-							if(w->new_byte_read_signal_) {	// new rotational byte is available
-								// is the byte 0x00?
-								// if()
-							}
-						}
-						// is verify operation done?
-						if(w->verify_operation_done) {
+
+						// do verification operation...
+						w->verify_operation_active = 1;
+						// check if 5 index holes have passed
+						if(w->verify_index_count >= 5) {
+							w->verify_operation_active = 0;
 							// command is done
 							w->command_done = 1;
-							w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
-							w->HLD_idle_reset_timer = 0.0;
+							// reset (clear) busy status bit
+							w->statusRegister &= 0b11111110;
+							// set SEEK ERROR bit
+							w->statusRegister |= 0b00010000;
+							// w->HLD_idle_reset_timer = 0.0;
 							// assume verification operation is successful - generate interrupt
 							w->intrq = 1;
 							// e8259_set_irq0 (e8259_slave, 1);
 							// reset HLD idle timer
 							return;
 						}
-					}
-				}
-			}
+
+						if(w->new_byte_read_signal_) {	// new byte available to read
+
+							unsigned char incoming_byte = getFDiskByte(w);
+							// look for four 0x00 bytes in a row
+							if(w->zero_byte_counter < 4) {
+								if(incoming_byte == 0x00) {w->zero_byte_counter++; return;}
+								else {w->zero_byte_counter = 0; return;}
+							}
+							// look for 3 0xA1 bytes in a row before 16 bytes pass
+							if(w->a1_byte_counter < ID_AM_PREFIX_LENGTH) {
+								if(incoming_byte == 0xA1) {
+									w->a1_byte_counter++;
+									return;
+								}
+								else {	// not 0xA1
+									w->address_mark_search_count++;
+									// have 16 bytes passed without finding 0xA1 (ID field)?
+									if(w->address_mark_search_count >= ID_FIELD_SEARCH_LIMIT) {
+											w->zero_byte_counter = 0;
+											w->address_mark_search_count = 0;
+											w->a1_byte_counter = 0;
+											return;
+									}
+								}
+							}
+							// look for 0xFE
+							if(w->index_id_field_found == 0 && incoming_byte == 0xFE) {
+								w->index_id_field_found = 1;
+								return;
+							}
+							else {
+								w->zero_byte_counter = 0;
+								w->address_mark_search_count = 0;
+								w->a1_byte_counter = 0;
+								w->index_id_field_found = 0;
+								return;
+							}
+							// collect ID field data
+							if(w->index_id_field_found && w->id_field_data_array_pt < 6) {
+								// collect data
+								w->id_field_data[w->id_field_data_array_pt] = incoming_byte;
+								w->id_field_data_array_pt++;
+								return;
+							}
+							// check track register against track ID data
+							if(w->trackRegister == w->id_field_data[0]) {
+								w->verify_operation_active = 0;
+								// command is done
+								w->command_done = 1;
+								w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+								// w->HLD_idle_reset_timer = 0.0;
+								// assume verification operation is successful - generate interrupt
+								w->intrq = 1;
+								// e8259_set_irq0 (e8259_slave, 1);
+								// reset HLD idle timer
+								return;
+							}
+							// track ID field != track register - keep searching
+							else {
+								w->zero_byte_counter = 0;
+								w->address_mark_search_count = 0;
+								w->a1_byte_counter = 0;
+								w->index_id_field_found = 0;
+								w->id_field_data_array_pt = 0;
+								return;
+							}
+						}	// END READ new byte
+					}	// END verify operation
+				}	// END verify head settling (30ms - 1MHz)
+			}	// END VERIFY sequence
 		}	// END verify/head settling phase
 
 	}	// END TYPE I command
@@ -756,7 +835,14 @@ void setupTypeICommand(JWD1797* w) {
 	w->command_done = 0;
 	w->head_settling_done = 0;
 	w->step_timer = 0.0;
-	w->verify_operation_done = 0;
+	w->verify_operation_active = 0;
+	w->verify_index_count = 0;
+	w->zero_byte_counter = 0;
+	w->address_mark_search_count = 0;	/* after 16 bytes (MFM),
+		zero_byte_counter reset */
+	w->a1_byte_counter = 0;	// look for three 0xA1 bytes
+	w->index_id_field_found = 0;
+	w->id_field_data_array_pt = 0;
 	// set appropriate status bits for type I command to start
 	typeIStatusReset(w);
 	// establish step rate options (in ms) for 1MHz clock (only used with TYPE I cmds)
@@ -1102,58 +1188,36 @@ void printCommandFlags(JWD1797* w) {
 }
 
 void handleIndexPulse(JWD1797* w, double time) {
-	// printf("%s%lu\n", "Rotational byte ptr: ", w->rotational_byte_pointer);
-	// only increment index pulse timer if index pulse is high (1)
-	// if(w->index_pulse_pin) {w->index_pulse_timer += time;}
-	// if the rotational byte pointer is at 0 start index pulse
-	if(w->rotational_byte_pointer == 0) {
+	// beginning of track encountered and IP timer has not been set
+	if(w->track_start_signal_ = 1) {
+		w->track_start_signal_ = 0;
 		w->index_pulse_pin = 1;
+		w->index_pulse_timer = INDEX_HOLE_PULSE_US;
+	}
+
+	// only decrement index pulse timer if index pulse is high (1)
+	if(w->index_pulse_pin) {
+		w->index_pulse_timer -= time;
 		// set IP status if TYPE I command is active
 		if(w->currentCommandType == 1) {w->statusRegister |= 0b00000010;}
 	}
-	else {
+	if(w->index_pulse_timer <= 0.0) {
 		w->index_pulse_pin = 0;
 		// clear IP status if TYPE I command is active
 		if(w->currentCommandType == 1) {w->statusRegister &= 0b11111101;}
+		// reset index pulse timer
 	}
-
-
-	// w->index_encounter_timer += time;
-	// // only increment index pulse timer if index pulse is high (1)
-	// if(w->index_pulse_pin) {w->index_pulse_timer += time;}
-	//
-	// if(!w->index_pulse_pin && w->index_encounter_timer >= INDEX_HOLE_ENCOUNTER_US) {
-	// 	w->index_pulse_pin = 1;
-	// 	// set IP status if TYPE I command is active
-	// 	if(w->currentCommandType == 1) {w->statusRegister |= 0b00000010;}
-	// 	// reset index hole encounter timer
-	// 	w->index_encounter_timer = 0.0;
-	// }
-	// // check index pulse timer
-	// if(w->index_pulse_pin && w->index_pulse_timer >= INDEX_HOLE_PULSE_US) {
-	// 	w->index_pulse_pin = 0;
-	// 	// clear IP status if TYPE I command is active
-	// 	if(w->currentCommandType == 1) {w->statusRegister &= 0b11111101;}
-	// 	// reset index pulse timer
-	// 	w->index_pulse_timer = 0.0;
-	// }
 }
 
-void handleHLDIdle(JWD1797* w, double time) {
-	// if drive not busy (idle)
-	int busy = w->statusRegister & 1;
-	if(!busy && w->HLD_pin == 1) {
-		// increase the HLD idle timer by the incoming processor instruction time
-		w->HLD_idle_reset_timer += time;
-		// check to see if HLD must be reset because of idle
-		if(w->HLD_idle_reset_timer >= HLD_IDLE_RESET_LIMIT) {
-			w->HLD_pin = 0;
-			w->HLD_idle_reset_timer = 0.0;
-		}
+void handleHLDIdle(JWD1797* w) {
+	// check to see if HLD must be reset because of idle
+	if(w->HLD_idle_index_count >= HLD_IDLE_INDEX_COUNT_LIMIT) {
+		w->HLD_pin = 0;
+		w->HLD_idle_index_count = 0;
 	}
 	// if busy, make sure timer starts at 0.0 for start of next IDLE TIME count
-	else if(busy) {
-		w->HLD_idle_reset_timer = 0.0;
+	if(w->statusRegister & 1) {
+		w->HLD_idle_index_count = 0;
 	}
 }
 
