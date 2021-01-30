@@ -139,8 +139,9 @@ int zero_byte_counter;
 int a1_byte_counter;
 int verify_index_count;
 int address_mark_search_count;
-int index_id_field_found;
+int id_field_found;
 int id_field_data_array_pt;
+int id_field_data_collected;
 /* collects ID Field data
   (0: cylinders, 1: head, 2: sector, 3: sector len, 4: CRC1, 5: CRC2) */
 unsigned char id_field_data[6];
@@ -175,3 +176,9 @@ void handleHLTTimer(JWD1797*, double);
 char* diskImageToCharArray(char*, JWD1797*);
 void assembleFormattedDiskArray(JWD1797*, char*);
 unsigned char getFDiskByte(JWD1797*);
+void handleVerifyHeadSettleDelay(JWD1797*, double);
+int verifyIndexTimeout(JWD1797*);
+int IDAddressMarkSearch(JWD1797*);
+int verifyTrackID(JWD1797*);
+int collectIDFieldData(JWD1797*);
+void typeICommandVerifySequence(JWD1797*, double);

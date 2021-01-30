@@ -601,111 +601,7 @@ void commandStep(JWD1797* w, double us) {
 
 			// VERIFY still waiting on verify head settling...
 			else if(w->verifyFlag) {
-				// if verify head settling has not occurred yet...
-				if(!w->head_settling_done) {
-					w->verify_head_settling_timer += us;
-					// check if verify head settling is timed out
-					if(w->verify_head_settling_timer >= VERIFY_HEAD_SETTLING_LIMIT) {
-						// reset timer
-						w->verify_head_settling_timer = 0.0;
-						w->head_settling_done = 1;
-					}
-				}	// END verify head settling delay
-
-				// head settling time is done. Wait for HLT pin to go high if not already.
-				else if(w->head_settling_done) {
-					// is HLT pin high?
-					if(w->HLT_pin) {
-						// head settling time has passed and the HLT pin is high
-
-						// do verification operation...
-						w->verify_operation_active = 1;
-						// check if 5 index holes have passed
-						if(w->verify_index_count >= 5) {
-							w->verify_operation_active = 0;
-							// command is done
-							w->command_done = 1;
-							// reset (clear) busy status bit
-							w->statusRegister &= 0b11111110;
-							// set SEEK ERROR bit
-							w->statusRegister |= 0b00010000;
-							// w->HLD_idle_reset_timer = 0.0;
-							// assume verification operation is successful - generate interrupt
-							w->intrq = 1;
-							// e8259_set_irq0 (e8259_slave, 1);
-							// reset HLD idle timer
-							return;
-						}
-
-						if(w->new_byte_read_signal_) {	// new byte available to read
-
-							unsigned char incoming_byte = getFDiskByte(w);
-							// look for four 0x00 bytes in a row
-							if(w->zero_byte_counter < 4) {
-								if(incoming_byte == 0x00) {w->zero_byte_counter++; return;}
-								else {w->zero_byte_counter = 0; return;}
-							}
-							// look for 3 0xA1 bytes in a row before 16 bytes pass
-							if(w->a1_byte_counter < ID_AM_PREFIX_LENGTH) {
-								if(incoming_byte == 0xA1) {
-									w->a1_byte_counter++;
-									return;
-								}
-								else {	// not 0xA1
-									w->address_mark_search_count++;
-									// have 16 bytes passed without finding 0xA1 (ID field)?
-									if(w->address_mark_search_count >= ID_FIELD_SEARCH_LIMIT) {
-											w->zero_byte_counter = 0;
-											w->address_mark_search_count = 0;
-											w->a1_byte_counter = 0;
-											return;
-									}
-								}
-							}
-							// look for 0xFE
-							if(w->index_id_field_found == 0 && incoming_byte == 0xFE) {
-								w->index_id_field_found = 1;
-								return;
-							}
-							else {
-								w->zero_byte_counter = 0;
-								w->address_mark_search_count = 0;
-								w->a1_byte_counter = 0;
-								w->index_id_field_found = 0;
-								return;
-							}
-							// collect ID field data
-							if(w->index_id_field_found && w->id_field_data_array_pt < 6) {
-								// collect data
-								w->id_field_data[w->id_field_data_array_pt] = incoming_byte;
-								w->id_field_data_array_pt++;
-								return;
-							}
-							// check track register against track ID data
-							if(w->trackRegister == w->id_field_data[0]) {
-								w->verify_operation_active = 0;
-								// command is done
-								w->command_done = 1;
-								w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
-								// w->HLD_idle_reset_timer = 0.0;
-								// assume verification operation is successful - generate interrupt
-								w->intrq = 1;
-								// e8259_set_irq0 (e8259_slave, 1);
-								// reset HLD idle timer
-								return;
-							}
-							// track ID field != track register - keep searching
-							else {
-								w->zero_byte_counter = 0;
-								w->address_mark_search_count = 0;
-								w->a1_byte_counter = 0;
-								w->index_id_field_found = 0;
-								w->id_field_data_array_pt = 0;
-								return;
-							}
-						}	// END READ new byte
-					}	// END verify operation
-				}	// END verify head settling (30ms - 1MHz)
+				typeICommandVerifySequence(w, us);
 			}	// END VERIFY sequence
 		}	// END verify/head settling phase
 
@@ -841,8 +737,9 @@ void setupTypeICommand(JWD1797* w) {
 	w->address_mark_search_count = 0;	/* after 16 bytes (MFM),
 		zero_byte_counter reset */
 	w->a1_byte_counter = 0;	// look for three 0xA1 bytes
-	w->index_id_field_found = 0;
+	w->id_field_found = 0;
 	w->id_field_data_array_pt = 0;
+	w->id_field_data_collected = 0;
 	// set appropriate status bits for type I command to start
 	typeIStatusReset(w);
 	// establish step rate options (in ms) for 1MHz clock (only used with TYPE I cmds)
@@ -1457,4 +1354,152 @@ unsigned char getFDiskByte(JWD1797* w) {
 	// which head (side)?
 	r_byte_pt = r_byte_pt + (w->sso_pin * (w->actual_num_track_bytes * w->cylinders));
 	return w->formattedDiskArray[r_byte_pt];
+}
+
+void handleVerifyHeadSettleDelay(JWD1797* w, double us) {
+	// if verify head settling has not occurred yet...
+	if(!w->head_settling_done) {
+		w->verify_head_settling_timer += us;
+		// check if verify head settling is timed out
+		if(w->verify_head_settling_timer >= VERIFY_HEAD_SETTLING_LIMIT) {
+			// reset timer
+			w->verify_head_settling_timer = 0.0;
+			w->head_settling_done = 1;
+		}
+	}	// END verify head settling delay
+}
+
+/* returns 1 if verify sequnce times out after 5 index holes have passed while
+ 	looking for an ID address mark. Otherwise, retunrs 0 */
+int verifyIndexTimeout(JWD1797* w) {
+	// check if 5 index holes have passed
+	if(w->verify_index_count >= 5) {
+		w->verify_operation_active = 0;
+		// command is done
+		w->command_done = 1;
+		// reset (clear) busy status bit
+		w->statusRegister &= 0b11111110;
+		// set SEEK ERROR bit
+		w->statusRegister |= 0b00010000;
+		// w->HLD_idle_reset_timer = 0.0;
+		// assume verification operation is successful - generate interrupt
+		w->intrq = 1;
+		// e8259_set_irq0 (e8259_slave, 1);
+		// reset HLD idle timer
+		return 1;
+	}
+	return 0;
+}
+
+// returns 1 if ID address mark is found, otherwise returns 0
+int IDAddressMarkSearch(JWD1797* w) {
+	// get byte based on rotational byte and current track
+	unsigned char incoming_byte = getFDiskByte(w);
+	// look for four 0x00 bytes in a row (MFM)
+	if(w->zero_byte_counter < 4) {
+		if(incoming_byte == 0x00) {w->zero_byte_counter++; return 0;}
+		else {w->zero_byte_counter = 0; return 0;}
+	}
+	// look for 3 0xA1 bytes in a row before 16 bytes pass (MFM)
+	if(w->a1_byte_counter < ID_AM_PREFIX_LENGTH) {
+		if(incoming_byte == 0xA1) {w->a1_byte_counter++; return 0;}
+		else {	// not 0xA1
+			w->a1_byte_counter = 0;
+			w->address_mark_search_count++;
+			// have 16 bytes passed without finding 3 consecutive 0xA1 (ID field)?
+			if(w->address_mark_search_count >= ID_FIELD_SEARCH_LIMIT) {
+					w->zero_byte_counter = 0;
+					w->address_mark_search_count = 0;
+					w->a1_byte_counter = 0;
+					return 0;
+			}
+		}
+	}
+	// look for 0xFE - if so, IDAM has been found
+	if(w->id_field_found == 0 && incoming_byte == 0xFE) {
+		w->id_field_found = 1;
+		return 1;
+	}
+	// 4 x 0x00, 3 x 0xA1, but no 0xFE - start search from the beginning..
+	w->zero_byte_counter = 0;
+	w->address_mark_search_count = 0;
+	w->a1_byte_counter = 0;
+	w->id_field_found = 0;
+	return 0;
+}
+
+/* collect ID field data into w->id_field_data[6]. Returns 1 when complete,
+ 	returns 0 until [TRACK, HEAD, SECTOR, LENGTH, CRC1, CRC2] collection is
+	complete */
+int collectIDFieldData(JWD1797* w) {
+	// collect bytes into array
+	if(w->id_field_data_array_pt < 6) {
+		w->id_field_data[w->id_field_data_array_pt] = getFDiskByte(w);
+		w->id_field_data_array_pt++;
+		return 0;
+	}
+	w->id_field_data_collected = 1;
+	return 1;
+}
+
+/* this function will check the track ID against w->trackRegister after the ID
+	field has been collected in a verify operation - will return 1 if matched,
+	0 otherwise. */
+int verifyTrackID(JWD1797* w) {
+	if(w->trackRegister == w->id_field_data[0]) {
+		w->verify_operation_active = 0;
+		// command is done
+		w->command_done = 1;
+		w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+		// w->HLD_idle_reset_timer = 0.0;
+		// assume verification operation is successful - generate interrupt
+		w->intrq = 1;
+		// e8259_set_irq0 (e8259_slave, 1);
+		// reset HLD idle timer
+		return 1;
+	}
+	// track ID field != track register - keep searching
+	else {
+		w->zero_byte_counter = 0;
+		w->address_mark_search_count = 0;
+		w->a1_byte_counter = 0;
+		w->id_field_found = 0;
+		w->id_field_data_collected = 0;
+		w->id_field_data_array_pt = 0;
+		return 0;
+	}
+}
+
+/* verify delay timer, wait for HLT, index hole timout check,
+	search for ID field, track ID/track register compare, CRC check */
+void typeICommandVerifySequence(JWD1797* w, double us) {
+	// if verify delay (30ms - 1 MHz clock), w->head_settling_done = 1
+	handleVerifyHeadSettleDelay(w, us);
+	// head settling time is done. Wait for HLT pin to go high if not already.
+	if(w->head_settling_done) {
+		// is HLT pin high?
+		if(w->HLT_pin) {
+			// (head settling time has passed and the HLT pin is high)
+			// do verification operation...
+			w->verify_operation_active = 1;
+			// check if 5 index holes have passed
+			if(verifyIndexTimeout(w)) {return;}
+			// new byte available to read
+			if(w->new_byte_read_signal_) {
+				// search for ID Address field if not already found
+				if(!w->id_field_found) {
+					// if still searching.. return
+					IDAddressMarkSearch(w); return;
+				}
+				/* collect ID field data when ID field found and not already
+					collected */
+				if(!w->id_field_data_collected) {collectIDFieldData(w); return;}
+			}	// END READ new byte
+			if(w->id_field_data_collected) {
+				// check track register against track ID data
+				verifyTrackID(w);
+				// should check CRC bytes here (CRC circuitry NOT implemented yet)
+			}
+		}	// END verify operation
+	}	// END verify head settling (30ms - 1MHz)
 }
