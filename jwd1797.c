@@ -23,15 +23,15 @@
 // an index hole is encountered every 0.2 seconds with a 300 RPM drive
 // #define INDEX_HOLE_ENCOUNTER_US 200000
 // index hole pulses should last for 20 microseconds (WD1797 docs)
-#define INDEX_HOLE_PULSE_US 40
+#define INDEX_HOLE_PULSE_US 40.0
 // when non-busy status and HLD high, reset HLD after 15 index pulses
 #define HLD_IDLE_INDEX_COUNT_LIMIT 15
 // head load timing (this can be set from 30-100 ms, depending on drive)
-#define HEAD_LOAD_TIMING_LIMIT 45*1000	// set to 45 ms (45,000 us)
+#define HEAD_LOAD_TIMING_LIMIT 45.0*1000	// set to 45 ms (45,000 us)
 // verify time is 30 milliseconds for a 1MHz clock
-#define VERIFY_HEAD_SETTLING_LIMIT 30*1000
+#define VERIFY_HEAD_SETTLING_LIMIT 30.0*1000
 // E (15 ms delay) for TYPE II and III commands (30 ms for 1 MHz clock)
-#define E_DELAY_LIMIT 30*1000
+#define E_DELAY_LIMIT 30.0*1000
 /* time limit for data shift register to assemble byte in data register
 	(simulated). This value is based on 'https://www.hp9845.net/9845/projects/fdio/#hp_formats'
 	where the 5.25" DS/DD disk is reported to have a 300 kbps data rate. */
@@ -101,15 +101,17 @@ JWD1797* newJWD1797() {
 // the wd1797 has a 1MHz clock in the Z100 for 5.25" floppy
 
 void resetJWD1797(JWD1797* jwd_controller) {
-	jwd_controller->dataShiftRegister = 0x00;
-	jwd_controller->dataRegister = 0x00;
-	jwd_controller->trackRegister = 0x00;
-	jwd_controller->sectorRegister = 0x00;
-	jwd_controller->commandRegister = 0x00;
-	jwd_controller->statusRegister = 0x00;
-	jwd_controller->CRCRegister = 0x00;
+	jwd_controller->dataShiftRegister = 0b00000000;
+	jwd_controller->dataRegister = 0b00000000;
+	jwd_controller->trackRegister = 0b00000000;
+	jwd_controller->sectorRegister = 0b00000000;
+	jwd_controller->commandRegister = 0b00000000;
+	jwd_controller->statusRegister = 0b00000000;
+	jwd_controller->CRCRegister = 0b00000000;
 
 	jwd_controller->disk_img_index_pointer = 0;
+	jwd_controller->rotational_byte_pointer = 6390;	// start at a few bytes before 0 index
+	jwd_controller->rw_start_byte = 0;
 
 	// jwd_controller->ready = 0;	// start drive not ready
 	// jwd_controller->stepDirection = 0;	// start direction step out -> track 00
@@ -152,11 +154,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->e_delay_timer = 0.0;
 	jwd_controller->assemble_data_byte_timer = 0.0;
 	jwd_controller->rotational_byte_read_timer = 0.0;
-	jwd_controller->command_typeII_timer = 0.0;
-	jwd_controller->command_typeIII_timer = 0.0;
-	jwd_controller->command_typeIV_timer = 0.0;
 	jwd_controller->HLD_idle_reset_timer = 0.0;
-	jwd_controller->HLD_idle_index_count = 0;
 	jwd_controller->HLT_timer = 0.0;
 
 	jwd_controller->index_pulse_pin = 0;
@@ -171,6 +169,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 
 	jwd_controller->delayed_HLD = 0;
 	jwd_controller->HLT_timer_active = 0;
+	jwd_controller->HLD_idle_index_count = 0;
 
 	jwd_controller->drq = 0;
 	jwd_controller->intrq = 0;
@@ -188,15 +187,24 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->formattedDiskArray = NULL;
 	jwd_controller->actual_num_track_bytes = 0;
 
-	jwd_controller->disk_img_index_pointer = 0;
-	// jwd_controller->rotational_byte_pointer = getRandomRotationalByte(jwd_controller);
-	jwd_controller->rotational_byte_pointer = 0;
-	jwd_controller->rw_start_byte = 0;
-
 	jwd_controller->new_byte_read_signal_ = 0;
+	jwd_controller->track_start_signal_ = 0;
 
 	jwd_controller->zero_byte_counter = 0;
 	jwd_controller->a1_byte_counter = 0;
+	jwd_controller->verify_index_count = 0;
+	jwd_controller->address_mark_search_count = 0;
+	jwd_controller->id_field_found = 0;
+	jwd_controller->id_field_data_array_pt = 0;
+	jwd_controller->id_field_data_collected = 0;
+	/* collects ID Field data
+	  (0: cylinders, 1: head, 2: sector, 3: sector len, 4: CRC1, 5: CRC2)
+		initialize all to 0x00 */
+	for(int i = 0; i < 6; i++) {
+		jwd_controller->id_field_data[i] = 0x00;
+	}
+	jwd_controller->ID_data_verified = 0;
+	jwd_controller->intSectorLength = 0;
 
 	// disk_content_array = diskImageToCharArray("z-dos-1.img", jwd_controller);
 	// TEST disk image to array function
@@ -601,34 +609,34 @@ void commandStep(JWD1797* w, double us) {
 
 			// VERIFY still waiting on verify head settling...
 			else if(w->verifyFlag) {
-				typeICommandVerifySequence(w, us);
+				typeIVerifySequence(w, us);
 			}	// END VERIFY sequence
 		}	// END verify/head settling phase
 
 	}	// END TYPE I command
 
 	else if(w->currentCommandType == 2) {
-		// do delay if E set and delay not done yet
-		if(w->e_delay_done == 0 && w->delay15ms) {
-			// clock the e delay timer
-			w->e_delay_timer += us;
-			// check if E delay timer has reached limit
-			if(w->e_delay_timer >= E_DELAY_LIMIT) {
-				w->e_delay_done = 1;
-				w->e_delay_timer = 0.0;
-			}
-			return;	// delay still in progess - do not continue with command
-		}
+		// stall here until E delay clock has expired, if engaged
+		if(handleEDelay(w, us) == 0) {return;}
 		// sample HLT pin - do not continue with command if HLT pin has not engaged
 		if(w->HLT_pin == 0) {return;}
 		updateTG43Signal(w);
+		// ID Address mark verification
+		if(!w->ID_data_verified) {
+			w->verify_operation_active = 1;
+			typeIICmdIDVerify(w);
+			// if ID data has not been verified, do not continue type II cmd
+			return;
+		}
+		// ID address mark data is valid.. now look for Data Address mark (DATA AM)
+		// @%@%@%@%@%@%@&@&@%@%@&@%@& TO DO - CONTINUE HERE *&*&*&%$$%%
 
 		// *** REVAMP THIS set start byte for reading/writing if not set already
-		if(!w->start_byte_set) {
-			w->disk_img_index_pointer = 0;	// @@@ FIX THIS!!!
-			w->start_byte_set = 1;
-			w->rw_start_byte = w->disk_img_index_pointer;
-		}
+		// if(!w->start_byte_set) {
+		// 	w->disk_img_index_pointer = 0;	// @@@ FIX THIS!!!
+		// 	w->start_byte_set = 1;
+		// 	w->rw_start_byte = w->disk_img_index_pointer;
+		// }
 		// ****
 
 		// READ SECTOR
@@ -712,7 +720,6 @@ void commandStep(JWD1797* w, double us) {
 				w->disk_img_index_pointer);
 		}
 
-
 	} // END TYPE III command
 
 }	// END general command step
@@ -780,7 +787,18 @@ void setupTypeIICommand(JWD1797* w) {
 	w->currentCommandType = 2;
 	w->command_done = 0;
 	w->e_delay_done = 0;
-	w->start_byte_set = 0;
+	w->start_byte_set = 0;	// ??
+	w->verify_operation_active = 0;
+	w->verify_index_count = 0;
+	w->ID_data_verified = 0;
+	w->intSectorLength = 0;
+	w->zero_byte_counter = 0;
+	w->address_mark_search_count = 0;	/* after 16 bytes (MFM),
+		zero_byte_counter reset */
+	w->a1_byte_counter = 0;	// look for three 0xA1 bytes
+	w->id_field_found = 0;
+	w->id_field_data_array_pt = 0;
+	w->id_field_data_collected = 0;
 
 	// set busy status
 	w->statusRegister |= 0b00000001;
@@ -1085,13 +1103,14 @@ void printCommandFlags(JWD1797* w) {
 }
 
 void handleIndexPulse(JWD1797* w, double time) {
+	// printf("%f\n", w->index_pulse_timer);
+	// printf("%d\n", w->track_start_signal_);
 	// beginning of track encountered and IP timer has not been set
-	if(w->track_start_signal_ = 1) {
+	if(w->track_start_signal_ == 1) {
 		w->track_start_signal_ = 0;
 		w->index_pulse_pin = 1;
 		w->index_pulse_timer = INDEX_HOLE_PULSE_US;
 	}
-
 	// only decrement index pulse timer if index pulse is high (1)
 	if(w->index_pulse_pin) {
 		w->index_pulse_timer -= time;
@@ -1189,7 +1208,7 @@ void assembleFormattedDiskArray(JWD1797* w, char* fileName) {
 		+ DATA_AM_PREFIX_LENGTH + DATA_AM_LENGTH + w->sector_length
 		+ CRC_LENGTH + GAP3_LENGTH)) + GAP4B_LENGTH;
 
-	printf("%d\n", w->actual_num_track_bytes);
+	printf("%s%d\n", "Formatted bytes per track: ", w->actual_num_track_bytes);
 
 	// now, get the total amount of bytes for the entire formatted disk
 	long formatted_disk_size = (w->cylinders * 2) * w->actual_num_track_bytes;
@@ -1379,7 +1398,7 @@ int verifyIndexTimeout(JWD1797* w) {
 		w->command_done = 1;
 		// reset (clear) busy status bit
 		w->statusRegister &= 0b11111110;
-		// set SEEK ERROR bit
+		// set SEEK ERROR/RECORD NOT FOUND bit
 		w->statusRegister |= 0b00010000;
 		// w->HLD_idle_reset_timer = 0.0;
 		// assume verification operation is successful - generate interrupt
@@ -1397,7 +1416,10 @@ int IDAddressMarkSearch(JWD1797* w) {
 	unsigned char incoming_byte = getFDiskByte(w);
 	// look for four 0x00 bytes in a row (MFM)
 	if(w->zero_byte_counter < 4) {
-		if(incoming_byte == 0x00) {w->zero_byte_counter++; return 0;}
+		if(incoming_byte == 0x00) {
+			w->zero_byte_counter++;
+			return 0;
+		}
 		else {w->zero_byte_counter = 0; return 0;}
 	}
 	// look for 3 0xA1 bytes in a row before 16 bytes pass (MFM)
@@ -1413,6 +1435,7 @@ int IDAddressMarkSearch(JWD1797* w) {
 					w->a1_byte_counter = 0;
 					return 0;
 			}
+			return 0;
 		}
 	}
 	// look for 0xFE - if so, IDAM has been found
@@ -1447,15 +1470,7 @@ int collectIDFieldData(JWD1797* w) {
 	0 otherwise. */
 int verifyTrackID(JWD1797* w) {
 	if(w->trackRegister == w->id_field_data[0]) {
-		w->verify_operation_active = 0;
-		// command is done
-		w->command_done = 1;
-		w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
-		// w->HLD_idle_reset_timer = 0.0;
-		// assume verification operation is successful - generate interrupt
-		w->intrq = 1;
-		// e8259_set_irq0 (e8259_slave, 1);
-		// reset HLD idle timer
+		printf("\n%s\n\n", "TRACK VERIFIED!!");
 		return 1;
 	}
 	// track ID field != track register - keep searching
@@ -1470,9 +1485,82 @@ int verifyTrackID(JWD1797* w) {
 	}
 }
 
+/* this function will check the sector ID against w->sectorRegister after the ID
+	field has been collected in a verify operation - will return 1 if matched,
+	0 otherwise. */
+int verifySectorID(JWD1797* w) {
+	if(w->sectorRegister == w->id_field_data[2]) {
+		printf("\n%s\n\n", "SECTOR VERIFIED!!");
+		return 1;
+	}
+	else {
+		w->zero_byte_counter = 0;
+		w->address_mark_search_count = 0;
+		w->a1_byte_counter = 0;
+		w->id_field_found = 0;
+		w->id_field_data_collected = 0;
+		w->id_field_data_array_pt = 0;
+		return 0;
+	}
+}
+
+/* this function will check the head ID against w->sso_pin after the ID
+	field has been collected in a verify operation - will return 1 if matched,
+	0 otherwise. */
+int verifyHeadID(JWD1797* w) {
+	if(w->sso_pin == w->id_field_data[1]) {
+		printf("\n%s\n\n", "HEAD/SIDE VERIFIED!!");
+		return 1;
+	}
+	else {
+		w->zero_byte_counter = 0;
+		w->address_mark_search_count = 0;
+		w->a1_byte_counter = 0;
+		w->id_field_found = 0;
+		w->id_field_data_collected = 0;
+		w->id_field_data_array_pt = 0;
+		return 0;
+	}
+}
+
+/* this function is a stand-in for the CRC check. CRC is not actually
+ 	computed (yet). The CRC bytes are always set to 0x01 when creating the
+	formatted disk array. Thus, this function simply checks if the last
+	two bytes in the collected ID Address Data array, which respresent the
+	CRC bytes, are 0x01. */
+int verifyCRC(JWD1797* w) {
+	// do the two CRC bytes equal the TEMP values of 0x01? (TEMP!!)
+	if(w->id_field_data[4] == 0x01 && w->id_field_data[5] == 0x01) {
+		printf("\n%s\n\n", "CRC VERIFIED!!");
+		// reset CRC error status
+		w->statusRegister &= 0b11110111;
+		w->verify_operation_active = 0;
+		// command is done
+		w->command_done = 1;
+		w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+		// w->HLD_idle_reset_timer = 0.0;
+		// assume verification operation is successful - generate interrupt
+		w->intrq = 1;
+		// e8259_set_irq0 (e8259_slave, 1);
+		// reset HLD idle timer
+		return 1;
+	}
+	else {
+		w->zero_byte_counter = 0;
+		w->address_mark_search_count = 0;
+		w->a1_byte_counter = 0;
+		w->id_field_found = 0;
+		w->id_field_data_collected = 0;
+		w->id_field_data_array_pt = 0;
+		// set CRC error in TYPE I status
+		w->statusRegister |= 0b00001000;
+		return 0;
+	}
+}
+
 /* verify delay timer, wait for HLT, index hole timout check,
 	search for ID field, track ID/track register compare, CRC check */
-void typeICommandVerifySequence(JWD1797* w, double us) {
+void typeIVerifySequence(JWD1797* w, double us) {
 	// if verify delay (30ms - 1 MHz clock), w->head_settling_done = 1
 	handleVerifyHeadSettleDelay(w, us);
 	// head settling time is done. Wait for HLT pin to go high if not already.
@@ -1496,10 +1584,85 @@ void typeICommandVerifySequence(JWD1797* w, double us) {
 				if(!w->id_field_data_collected) {collectIDFieldData(w); return;}
 			}	// END READ new byte
 			if(w->id_field_data_collected) {
-				// check track register against track ID data
-				verifyTrackID(w);
-				// should check CRC bytes here (CRC circuitry NOT implemented yet)
+				/* check track register against track ID data -
+					if 1 is returned - track verified, continue to CRC checks
+					0 returned - track not verified - start search over */
+				if(verifyTrackID(w)) {verifyCRC(w);}
+				/* check CRC bytes (CRC circuitry NOT implemented yet)
+					CRC bytes are temporerily set to 0x01 in the formatted disk array */
 			}
 		}	// END verify operation
 	}	// END verify head settling (30ms - 1MHz)
+}
+
+/* handles the E delay timer for type II and III commands -- returns 0 if
+	clock is still active, 1 if delay clock has expired */
+int handleEDelay(JWD1797* w, double us) {
+	// do delay if E set and delay not done yet
+	if(w->e_delay_done == 0 && w->delay15ms) {
+		// clock the e delay timer
+		w->e_delay_timer += us;
+		// check if E delay timer has reached limit
+		if(w->e_delay_timer >= E_DELAY_LIMIT) {
+			w->e_delay_done = 1;
+			w->e_delay_timer = 0.0;
+			return 1;	// delay clock expired
+		}
+		return 0;	// delay still in progess - do not continue with command
+	}
+	return 1;	// delay option not active/delay clock expired
+}
+
+/* this function verifies that an ID address mark has been found, the track
+ 	ID matched the TR, the sector ID matches the SR, the head ID matched the
+	side select, saves the sector length, and checks the CRC bytes.
+	Returns 1 if the process times out because of an idex time out, 0 otherwise.
+	The ID_data_verified flag is used to signal that the verification process has
+	been successful. */
+int typeIICmdIDVerify(JWD1797* w) {
+	/* check if 5 index holes have passed -
+		if 1 is returned, process timed out, 0 -> continue with verification */
+	if(verifyIndexTimeout(w)) {return 1;}
+	// search for ID mark
+	if(!w->id_field_found) {
+		IDAddressMarkSearch(w);
+		return 0;
+	}
+	if(!w->id_field_data_collected) {
+		collectIDFieldData(w);
+		return 0;
+	}
+	int track_verified = verifyTrackID(w);
+	if(!track_verified) {return 0;}
+	int sector_verified = verifySectorID(w);
+	if(!sector_verified) {return 0;}
+	int head_verified = verifyHeadID(w);
+	if(!head_verified) {return 0;}
+	// extract sector length from ID Field
+	w->intSectorLength = getSectorLengthFromID(w);
+	if(!verifyCRC(w)) {return 0;}
+	// ID data is valid..
+	w->ID_data_verified = 1;
+	return 0;
+}
+
+/* this function reads the sector length field of the IDAM data and extracts
+	the actual integer sector length */
+int getSectorLengthFromID(JWD1797* w) {
+	switch (w->id_field_data[3]) {
+		case 0x00:
+			return 128;
+			break;
+		case 0x01:
+			return 256;
+			break;
+		case 0x02:
+			return 512;
+			break;
+		case 0x03:
+			return 1024;
+			break;
+		default:
+			printf("%s\n", "ERROR: Non-standard sector length!");
+	}
 }

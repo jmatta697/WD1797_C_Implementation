@@ -8,6 +8,7 @@
 
 void restoreTestPrintHelper(JWD1797*);
 void readSectorPrintHelper(JWD1797*);
+void typeIVerifyPrintHelper(JWD1797*);
 void seekTestPrintHelper(JWD1797*);
 
 /* ------------- TEST FUNCTIONS ---------------- */
@@ -174,8 +175,16 @@ void indexPulseTest(JWD1797* jwd1797, double instr_times[]) {
     if(jwd1797->rotational_byte_pointer >= 6394 ||
       jwd1797->rotational_byte_pointer <= 2) {
       usleep(500000); // delay loop iteration for observation
+      printf(" -- \n%s", "Rot. Byte Ptr: ");
+      printf("%lu\n", jwd1797->rotational_byte_pointer);
       printf("%s", "MASTER CLOCK: ");
       printf("%f\n", jwd1797->master_timer);
+      printf("%s", "Track Start Signal: ");
+      printf("%d\n", jwd1797->track_start_signal_);
+      printf("%s", "INDEX PULSE TIMER: ");
+      printf("%f\n", jwd1797->index_pulse_timer);
+      printf("%s", "INDEX PULSE: ");
+      printf("%d\n", jwd1797->index_pulse_pin);
       printf("%s", "TYPE I STATUS REGISTER: ");
       print_bin8_representation(jwd1797->statusRegister);
       printf("%s\n", "");
@@ -193,51 +202,51 @@ void indexPulseTest(JWD1797* jwd1797, double instr_times[]) {
 void restoreCommandTest(JWD1797* jwd1797, double instr_times[]) {
   printf("\n\n%s\n", "-------------- RESTORE COMMAND TEST --------------");
 
-  resetJWD1797(jwd1797);
-  // set track to 3 to have RESTORE command do some work
-  jwd1797->current_track = 3;
-  jwd1797->trackRegister = 3;
-  // issue RESTORE command - no headlaod, no verify, 30 ms step rate
-  writeJWD1797(jwd1797, 0xB0, 0b00000011);
-  printf("%s\n\n", "------- RESTORE from track 3: h=0, V=0 -------");
+  // resetJWD1797(jwd1797);
+  // // set track to 3 to have RESTORE command do some work
+  // jwd1797->current_track = 3;
+  // jwd1797->trackRegister = 3;
+  // // issue RESTORE command - no headlaod, no verify, 30 ms step rate
+  // writeJWD1797(jwd1797, 0xB0, 0b00000011);
+  // printf("%s\n\n", "------- RESTORE from track 3: h=0, V=0 -------");
+  //
+  // for(int i = 0; i < 500000; i++) {
+  //   // printf("%s\n", "loop");
+  //   // simulate random instruction time by picking from instruction_times list
+  //   double instr_t = instr_times[rand()%7];
+  //   // printf("%f\n", instr_t);
+  //   doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+  //
+  //   if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
+  //     (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
+  //     (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015)) {
+  //       sleep(1); // delay loop iteration for observation
+  //       restoreTestPrintHelper(jwd1797);
+  //   }
+  // }
 
-  for(int i = 0; i < 500000; i++) {
-    // printf("%s\n", "loop");
-    // simulate random instruction time by picking from instruction_times list
-    double instr_t = instr_times[rand()%7];
-    // printf("%f\n", instr_t);
-    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
-
-    if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
-      (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
-      (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015)) {
-        sleep(1); // delay loop iteration for observation
-        restoreTestPrintHelper(jwd1797);
-    }
-  }
-
-  resetJWD1797(jwd1797);
-  // set track to 3 to have RESTORE command do some work
-  jwd1797->current_track = 3;
-  jwd1797->trackRegister = 3;
-  // issue RESTORE command - headlaod (60 ms), no verify, 30 ms step rate
-  writeJWD1797(jwd1797, 0xB0, 0b00001011);
-  printf("%s\n\n", "------- RESTORE from track 3: h=1, V=0 -------");
-
-  for(int i = 0; i < 500000; i++) {
-    // printf("%s\n", "loop");
-    // simulate random instruction time by picking from instruction_times list
-    double instr_t = instr_times[rand()%7];
-    // printf("%f\n", instr_t);
-    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
-
-    if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
-      (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
-      (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015)) {
-        sleep(1); // delay loop iteration for observation
-        restoreTestPrintHelper(jwd1797);
-    }
-  }
+  // resetJWD1797(jwd1797);
+  // // set track to 3 to have RESTORE command do some work
+  // jwd1797->current_track = 3;
+  // jwd1797->trackRegister = 3;
+  // // issue RESTORE command - headlaod (60 ms), no verify, 30 ms step rate
+  // writeJWD1797(jwd1797, 0xB0, 0b00001011);
+  // printf("%s\n\n", "------- RESTORE from track 3: h=1, V=0 -------");
+  //
+  // for(int i = 0; i < 500000; i++) {
+  //   // printf("%s\n", "loop");
+  //   // simulate random instruction time by picking from instruction_times list
+  //   double instr_t = instr_times[rand()%7];
+  //   // printf("%f\n", instr_t);
+  //   doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+  //
+  //   if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
+  //     (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
+  //     (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015)) {
+  //       sleep(1); // delay loop iteration for observation
+  //       restoreTestPrintHelper(jwd1797);
+  //   }
+  // }
 
   resetJWD1797(jwd1797);
   // set track to 3 to have RESTORE command do some work
@@ -258,8 +267,8 @@ void restoreCommandTest(JWD1797* jwd1797, double instr_times[]) {
       (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
       (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015) ||
       (jwd1797->master_timer >= 119990 && jwd1797->master_timer <= 120015) ||
-      (jwd1797->master_timer >= 149990 && jwd1797->master_timer <= 150015)) {
-        sleep(1); // delay loop iteration for observation
+      (jwd1797->master_timer >= 135000 && jwd1797->master_timer <= 150015)) {
+        usleep(500000); // delay loop iteration for observation
         restoreTestPrintHelper(jwd1797);
     }
   }
@@ -279,11 +288,8 @@ void restoreCommandTest(JWD1797* jwd1797, double instr_times[]) {
     // printf("%f\n", instr_t);
     doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
 
-    if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
-      (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
-      (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015) ||
-      (jwd1797->master_timer >= 119990 && jwd1797->master_timer <= 120015)) {
-        sleep(1); // delay loop iteration for observation
+    if(jwd1797->master_timer >= 123000) {
+        usleep(100000); // delay loop iteration for observation
         restoreTestPrintHelper(jwd1797);
     }
   }
@@ -316,12 +322,19 @@ void restoreCommandTest(JWD1797* jwd1797, double instr_times[]) {
 void restoreTestPrintHelper(JWD1797* jwd1797) {
   printf("%s", "MASTER CLOCK: ");
   printf("%f\n", jwd1797->master_timer);
+  printf("%s", "byte read: ");
+  printf("%02X\n", getFDiskByte(jwd1797));
   printf("%s", "V HEAD SETTLING TIMER: ");
   printf("%f\n", jwd1797->verify_head_settling_timer);
   printf("%s", "HLT TIMER: ");
   printf("%f\n", jwd1797->HLT_timer);
   printf("%s", "CURRENT TRACK: ");
   printf("%d\n", jwd1797->current_track);
+  printf("%s", "head settling done: ");
+  printf("%d\n", jwd1797->head_settling_done);
+  printf("%s", "HLT pin: ");
+  printf("%d\n", jwd1797->HLT_pin);
+  typeIVerifyPrintHelper(jwd1797);
   printf("%s", "TRACK REGISTER: ");
   print_bin8_representation(readJWD1797(jwd1797, 0xB1));
   printf("%s\n", "");
@@ -333,83 +346,85 @@ void restoreTestPrintHelper(JWD1797* jwd1797) {
 
 void seekCommandTest(JWD1797* jwd1797, double instr_times[]) {
   /* SEEK command assumes the target track is in the data register. Also, the
-    track register is updated */
+    track register is updated automatically */
   printf("\n\n%s\n", "-------------- SEEK COMMAND TEST --------------");
 
-  printf("%s\n\n", "------- SEEK from track 5 -> 2: h=0, V=0 -------");
-  // try to seek track 2 from current track 5
+  // printf("%s\n\n", "------- SEEK from track 5 -> 2: h=0, V=0 -------");
+  // // try to seek track 2 from current track 5
+  // resetJWD1797(jwd1797);
+  // jwd1797->current_track = 5;
+  // writeJWD1797(jwd1797, 0xB1, 0b00000101); // write track 5 to track register
+  // writeJWD1797(jwd1797, 0xB3, 0b00000010);  // write 2 to data register
+  // // issue SEEK command - no headlaod (60 ms), no verify (30 ms), 30 ms step rate
+  // writeJWD1797(jwd1797, 0xB0, 0b00010011);
+  //
+  // for(int i = 0; i < 500000; i++) {
+  //   // printf("%s\n", "loop");
+  //   // simulate random instruction time by picking from instruction_times list
+  //   double instr_t = instr_times[rand()%7];
+  //   // printf("%f\n", instr_t);
+  //   doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+  //
+  //   if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
+  //     (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
+  //     (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015)) {
+  //       sleep(1); // delay loop iteration for observation
+  //       seekTestPrintHelper(jwd1797);
+  //   }
+  // }
+  //
+  // printf("%s\n\n", "------- SEEK from track 2 -> 5: h=0, V=0 -------");
+  // // try to seek track 5 from current track 2
+  // resetJWD1797(jwd1797);
+  // jwd1797->current_track = 2;
+  // writeJWD1797(jwd1797, 0xB3, 0b00000101);  // write 5 to data register
+  // // issue SEEK command - no headlaod (60 ms), no verify (30 ms), 30 ms step rate
+  // writeJWD1797(jwd1797, 0xB0, 0b00010011);
+  //
+  // for(int i = 0; i < 500000; i++) {
+  //   // printf("%s\n", "loop");
+  //   // simulate random instruction time by picking from instruction_times list
+  //   double instr_t = instr_times[rand()%7];
+  //   // printf("%f\n", instr_t);
+  //   doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+  //
+  //   if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
+  //     (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
+  //     (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015)) {
+  //       sleep(1); // delay loop iteration for observation
+  //       seekTestPrintHelper(jwd1797);
+  //   }
+  // }
+  //
+  // printf("%s\n\n", "------- SEEK from track 3 -> 0: h=0, V=0 -------");
+  // // try to seek track 0 from current track 3
+  // resetJWD1797(jwd1797);
+  // jwd1797->current_track = 3;
+  // writeJWD1797(jwd1797, 0xB3, 0b00000000);  // write 0 to data register
+  // // issue SEEK command - no headlaod (60 ms), no verify (30 ms), 30 ms step rate
+  // writeJWD1797(jwd1797, 0xB0, 0b00010011);
+  //
+  // for(int i = 0; i < 500000; i++) {
+  //   // printf("%s\n", "loop");
+  //   // simulate random instruction time by picking from instruction_times list
+  //   double instr_t = instr_times[rand()%7];
+  //   // printf("%f\n", instr_t);
+  //   doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+  //
+  //   if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
+  //     (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
+  //     (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015)) {
+  //       sleep(1); // delay loop iteration for observation
+  //       seekTestPrintHelper(jwd1797);
+  //   }
+  // }
+
+  printf("%s\n\n", "------- SEEK from track 7 -> 5: h=1, V=1 -------");
+  // try to seek track 0 from current track 3
   resetJWD1797(jwd1797);
-  jwd1797->current_track = 5;
-  writeJWD1797(jwd1797, 0xB3, 0b00000010);  // write 2 to data register
-  // issue SEEK command - no headlaod (60 ms), no verify (30 ms), 30 ms step rate
-  writeJWD1797(jwd1797, 0xB0, 0b00010011);
-
-  for(int i = 0; i < 500000; i++) {
-    // printf("%s\n", "loop");
-    // simulate random instruction time by picking from instruction_times list
-    double instr_t = instr_times[rand()%7];
-    // printf("%f\n", instr_t);
-    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
-
-    if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
-      (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
-      (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015)) {
-        sleep(1); // delay loop iteration for observation
-        seekTestPrintHelper(jwd1797);
-    }
-  }
-
-  printf("%s\n\n", "------- SEEK from track 2 -> 5: h=0, V=0 -------");
-  // try to seek track 5 from current track 2
-  resetJWD1797(jwd1797);
-  jwd1797->current_track = 2;
+  jwd1797->current_track = 7;
+  writeJWD1797(jwd1797, 0xB1, 0b00000111);  // write 7 to data register
   writeJWD1797(jwd1797, 0xB3, 0b00000101);  // write 5 to data register
-  // issue SEEK command - no headlaod (60 ms), no verify (30 ms), 30 ms step rate
-  writeJWD1797(jwd1797, 0xB0, 0b00010011);
-
-  for(int i = 0; i < 500000; i++) {
-    // printf("%s\n", "loop");
-    // simulate random instruction time by picking from instruction_times list
-    double instr_t = instr_times[rand()%7];
-    // printf("%f\n", instr_t);
-    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
-
-    if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
-      (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
-      (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015)) {
-        sleep(1); // delay loop iteration for observation
-        seekTestPrintHelper(jwd1797);
-    }
-  }
-
-  printf("%s\n\n", "------- SEEK from track 3 -> 0: h=0, V=0 -------");
-  // try to seek track 0 from current track 3
-  resetJWD1797(jwd1797);
-  jwd1797->current_track = 3;
-  writeJWD1797(jwd1797, 0xB3, 0b00000000);  // write 0 to data register
-  // issue SEEK command - no headlaod (60 ms), no verify (30 ms), 30 ms step rate
-  writeJWD1797(jwd1797, 0xB0, 0b00010011);
-
-  for(int i = 0; i < 500000; i++) {
-    // printf("%s\n", "loop");
-    // simulate random instruction time by picking from instruction_times list
-    double instr_t = instr_times[rand()%7];
-    // printf("%f\n", instr_t);
-    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
-
-    if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
-      (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
-      (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015)) {
-        sleep(1); // delay loop iteration for observation
-        seekTestPrintHelper(jwd1797);
-    }
-  }
-
-  printf("%s\n\n", "------- SEEK from track 3 -> 0: h=1, V=1 -------");
-  // try to seek track 0 from current track 3
-  resetJWD1797(jwd1797);
-  jwd1797->current_track = 3;
-  writeJWD1797(jwd1797, 0xB3, 0b00000000);  // write 0 to data register
   // issue SEEK command - no headlaod (60 ms), no verify (30 ms), 30 ms step rate
   writeJWD1797(jwd1797, 0xB0, 0b00011111);
 
@@ -569,6 +584,8 @@ void seekTestPrintHelper(JWD1797* jwd1797) {
   printf("%f\n", jwd1797->HLT_timer);
   printf("%s", "CURRENT TRACK: ");
   printf("%d\n", jwd1797->current_track);
+  printf("%s", "Direction: ");
+  printf("%d\n", jwd1797->direction_pin);
   printf("%s", "TRACK REGISTER: ");
   print_bin8_representation(jwd1797->trackRegister);
   printf("%s\n", "");
@@ -577,8 +594,26 @@ void seekTestPrintHelper(JWD1797* jwd1797) {
   printf("%s\n", "");
   printf("%s", "TYPE I STATUS REGISTER: ");
   print_bin8_representation(jwd1797->statusRegister);
+  typeIVerifyPrintHelper(jwd1797);
   printf("%s\n", "");
   printf("%s\n", "");
+}
+
+void typeIVerifyPrintHelper(JWD1797* jwd1797) {
+  printf("\n%s", "0x00 count: ");
+  printf("%d\n", jwd1797->zero_byte_counter);
+  printf("%s", "Post 0x00 count search limit: ");
+  printf("%d\n", jwd1797->address_mark_search_count);
+  printf("%s", "0xA1 count: ");
+  printf("%d\n", jwd1797->a1_byte_counter);
+  printf("%s", "ID field Found: ");
+  printf("%d\n", jwd1797->id_field_found);
+  printf("%s", "ID field collected: ");
+  printf("%d\n", jwd1797->id_field_data_collected);
+  printf("%s", "verify_operation_active: ");
+  printf("%d\n", jwd1797->verify_operation_active);
+  printf("%s", "ID field data array: ");
+  printByteArray(jwd1797->id_field_data, 6);
 }
 
 void getFByteTest(JWD1797* jwd1797, double instr_times[]) {
@@ -593,6 +628,8 @@ void getFByteTest(JWD1797* jwd1797, double instr_times[]) {
     doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
     // only print when a new byte is read
     if(jwd1797->new_byte_read_signal_) {
+      printf("%s", "Rotational byte pointer: ");
+      printf("%lu\n", jwd1797->rotational_byte_pointer);
       printf("%s", "MASTER CLOCK: ");
       printf("%f -- ", jwd1797->master_timer);
       printf("%02X\n", getFDiskByte(jwd1797));

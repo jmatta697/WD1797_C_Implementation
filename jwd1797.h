@@ -23,6 +23,11 @@ unsigned char commandRegister; // do not load when device is busy - except force
 unsigned char statusRegister;
 unsigned char CRCRegister;
 
+// keep track of current byte being pointed to by the READ/WRITE head
+unsigned long disk_img_index_pointer;
+unsigned long rotational_byte_pointer;
+unsigned long rw_start_byte;
+
 // ready input from disk drive interface (0 = not ready, 1 = ready)
 // int ready;
 // step direction output to disk drive interface (0 = out->track00, 1 = in->track39)
@@ -30,24 +35,21 @@ unsigned char CRCRegister;
 // step pulse output to disk drive interface (MFM - 2 microseconds, FM - 4)
 // int stepPulse;
 
-// stepping motor rate - determined by TYPE I command bits 0 and 1
-int stepRate;
-
 char* currentCommandName;
 int currentCommandType;
 
 // TYPE I command flags
+// stepping motor rate - determined by TYPE I command bits 0 and 1
+int stepRate;
 int verifyFlag;
 int headLoadFlag;
 int trackUpdateFlag;
-
 // TYPE II/III command flags
 int dataAddressMark;
 int updateSSO;
 int delay15ms;
 int swapSectorLength;
 int multipleRecords;
-
 // TYPE IV - interrupt condition flags
 int interruptNRtoR;
 int interruptRtoNR;
@@ -56,18 +58,16 @@ int interruptImmediate;
 
 int command_action_done;  // flag indicates if the command action is done
 int command_done; // flag indicating that entire command is done -
-                  // including verification and delay -
 int head_settling_done;
 int verify_operation_active;
 int verify_operation_done;
 int e_delay_done;
 int start_byte_set;
+
 int terminate_command;
 
-// TESTING
-double master_timer;
-
 // ALL timers in microseconds
+double master_timer;  // for TESTING
 double index_pulse_timer;
 double index_encounter_timer;
 double step_timer;
@@ -75,9 +75,6 @@ double verify_head_settling_timer;
 double e_delay_timer;
 double assemble_data_byte_timer;
 double rotational_byte_read_timer;
-double command_typeII_timer;
-double command_typeIII_timer;
-double command_typeIV_timer;
 double HLD_idle_reset_timer;
 double HLT_timer;
 
@@ -125,11 +122,6 @@ long disk_img_file_size;
 char* formattedDiskArray;
 int actual_num_track_bytes;
 
-// keep track of current byte being pointed to by the READ/WRITE head
-unsigned long disk_img_index_pointer;
-unsigned long rotational_byte_pointer;
-unsigned long rw_start_byte;
-
 // emulator internal
 int new_byte_read_signal_;
 int track_start_signal_;
@@ -145,8 +137,12 @@ int id_field_data_collected;
 /* collects ID Field data
   (0: cylinders, 1: head, 2: sector, 3: sector len, 4: CRC1, 5: CRC2) */
 unsigned char id_field_data[6];
-
-
+/* flag to indicate that a TYPE II command (ie. READ SECTOR) has verified
+  all the ID address mark data and can continue */
+int ID_data_verified;
+/* used for the extracted value from the sector length ID field. Also used for
+  the iteration of READING/WRITING bytes of a sector*/
+int intSectorLength;
 
 } JWD1797;
 
@@ -181,4 +177,7 @@ int verifyIndexTimeout(JWD1797*);
 int IDAddressMarkSearch(JWD1797*);
 int verifyTrackID(JWD1797*);
 int collectIDFieldData(JWD1797*);
-void typeICommandVerifySequence(JWD1797*, double);
+void typeIVerifySequence(JWD1797*, double);
+int typeIICmdIDVerify(JWD1797*);
+int getSectorLengthFromID(JWD1797*);
+int handleEDelay(JWD1797*, double);
