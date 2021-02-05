@@ -210,6 +210,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	}
 	jwd_controller->ID_data_verified = 0;
 	jwd_controller->intSectorLength = 0;
+	jwd_controller->all_bytes_inputted = 0;
 
 	// disk_content_array = diskImageToCharArray("z-dos-1.img", jwd_controller);
 	// TEST disk image to array function
@@ -339,6 +340,7 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 			w->track_start_signal_ = 1;
 			// command execution idle - clock HLD idle index counter
 			if(w->statusRegister & 1 == 0) {w->HLD_idle_index_count++;}
+			else {w->HLD_idle_index_count = 0;}
 			// clock verify timeout counter
 			if(w->verify_operation_active) {w->verify_index_count++;}
 			else {w->verify_index_count = 0;}
@@ -657,19 +659,25 @@ void commandStep(JWD1797* w, double us) {
 			// ?? after DATA AM found, put reacord type in status bit 5 ??
 
 			// check if there is a new byte to read.. (ie. "assembled in DSR")
-			if(w->new_byte_read_signal_ && (w->intSectorLength > 0)) {
-				/* did computer read the last data byte in the DR? If DRQ is still high,
-					it did not; set lost data bit in status */
-				if(w->drq == 1) {w->statusRegister |= 0b00000100;}
-				// last byte was read (DRQ = 0) reset lost data bit
-				else {w->statusRegister &= 0b11111011;}
-				// read current byte into data register
-				w->dataRegister = getFDiskByte(w);
-				// set drq and status drq status bit
-				w->drq = 1;
-				w->statusRegister |= 0b00000010;
-				// decrement data field byte counter
-				w->intSectorLength--;
+			if(w->data_mark_found && !w->all_bytes_inputted) {
+				// is there a new byte in the DR
+				if(w->new_byte_read_signal_) {
+					/* did computer read the last data byte in the DR? If DRQ is still high,
+						it did not; set lost data bit in status */
+					if(w->drq == 1) {w->statusRegister |= 0b00000100;}
+					// last byte was read (DRQ = 0) reset lost data bit
+					else {w->statusRegister &= 0b11111011;}
+					// read current byte into data register
+					w->dataRegister = getFDiskByte(w);
+					// set drq and status drq status bit
+					w->drq = 1;
+					w->statusRegister |= 0b00000010;
+					// decrement data field byte counter
+					w->intSectorLength--;
+					// have all bytes in data field been read?
+					if(w->intSectorLength == 0) {w->all_bytes_inputted = 1;}
+					return;
+				}
 				return;
 			}
 
@@ -692,8 +700,18 @@ void commandStep(JWD1797* w, double us) {
 				}
 				// if sector number not out of bounds, find next sector
 				else {
+					w->verify_index_count = 0;
 					w->ID_data_verified = 0;
+					w->zero_byte_counter = 0;
+					w->address_mark_search_count = 0;	/* after 16 bytes (MFM) */
+					w->a1_byte_counter = 0;	// look for three 0xA1 bytes
+					w->id_field_found = 0;
+					w->id_field_data_array_pt = 0;
+					w->id_field_data_collected = 0;
+					w->data_a1_byte_counter = 0;	// counter for 0xA1 bytes for data field
+					w->data_mark_search_count = 0;
 					w->data_mark_found = 0;
+					w->all_bytes_inputted = 0;
 					return;
 				}
 			}
@@ -828,6 +846,7 @@ void setupTypeIICommand(JWD1797* w) {
 	w->data_a1_byte_counter = 0;	// counter for 0xA1 bytes for data field
 	w->data_mark_search_count = 0;
 	w->data_mark_found = 0;
+	w->all_bytes_inputted = 0;
 
 	// set busy status
 	w->statusRegister |= 0b00000001;
@@ -1419,6 +1438,7 @@ void handleVerifyHeadSettleDelay(JWD1797* w, double us) {
 int verifyIndexTimeout(JWD1797* w) {
 	// check if 5 index holes have passed
 	if(w->verify_index_count >= 5) {
+		printf("%s\n", "VERIFY INDEX TIMED OUT!");
 		w->verify_operation_active = 0;
 		// command is done
 		w->command_done = 1;
@@ -1443,10 +1463,11 @@ int IDAddressMarkSearch(JWD1797* w) {
 	// look for four 0x00 bytes in a row (MFM)
 	if(w->zero_byte_counter < 4) {
 		if(incoming_byte == 0x00) {
+			// printf("%s\n", "INCREMENTING 0x00 COUNT...");
 			w->zero_byte_counter++;
-			return 0;
 		}
-		else {w->zero_byte_counter = 0; return 0;}
+		else {w->zero_byte_counter = 0;}
+		return 0;
 	}
 	// look for 3 0xA1 bytes in a row before 16 bytes pass (MFM)
 	if(w->a1_byte_counter < ID_AM_PREFIX_LENGTH) {
@@ -1463,6 +1484,7 @@ int IDAddressMarkSearch(JWD1797* w) {
 			}
 			return 0;
 		}
+		return 0;
 	}
 	// look for 0xFE - if so, IDAM has been found
 	if(w->id_field_found == 0 && incoming_byte == 0xFE) {
@@ -1496,7 +1518,7 @@ int collectIDFieldData(JWD1797* w) {
 	0 otherwise. */
 int verifyTrackID(JWD1797* w) {
 	if(w->trackRegister == w->id_field_data[0]) {
-		// printf("\n%s\n\n", "TRACK VERIFIED!!");
+		printf("\n%s\n\n", "TRACK VERIFIED!!");
 		return 1;
 	}
 	// track ID field != track register - keep searching
@@ -1664,13 +1686,14 @@ int handleEDelay(JWD1797* w, double us) {
 /* this function verifies that an ID address mark has been found, the track
  	ID matched the TR, the sector ID matches the SR, the head ID matched the
 	side select, saves the sector length, and checks the CRC bytes.
-	Returns 1 if the process times out because of an idex time out, 0 otherwise.
+	Returns 0 if the process times out because of an idex time out or the verify
+	operation was not successful. Returns 1 if verified.
 	The ID_data_verified flag is used to signal that the verification process has
 	been successful. */
 int typeIICmdIDVerify(JWD1797* w) {
 	/* check if 5 index holes have passed -
 		if 1 is returned, process timed out, 0 -> continue with verification */
-	if(verifyIndexTimeout(w)) {return 1;}
+	if(verifyIndexTimeout(w)) {return 0;}
 	// new byte available to read
 	if(w->new_byte_read_signal_) {
 		// search for ID mark
@@ -1683,20 +1706,22 @@ int typeIICmdIDVerify(JWD1797* w) {
 			return 0;
 		}
 	}
-	// printByteArray(w->id_field_data, 6);
-	int track_verified = verifyTrackID(w);
-	if(!track_verified) {return 0;}
-	int sector_verified = verifySectorID(w);
-	if(!sector_verified) {return 0;}
-	int head_verified = verifyHeadID(w);
-	if(!head_verified) {return 0;}
-	// extract sector length from ID Field
-	w->intSectorLength = getSectorLengthFromID(w);
-	// printf("%d\n", w->intSectorLength);
-	if(!verifyCRCTypeII(w)) {return 0;}
-	// ID data is valid..
-	w->ID_data_verified = 1;
-	return 0;
+	if(w->id_field_data_collected) {
+		printByteArray(w->id_field_data, 6);
+		int track_verified = verifyTrackID(w);
+		if(!track_verified) {return 0;}
+		int sector_verified = verifySectorID(w);
+		if(!sector_verified) {return 0;}
+		int head_verified = verifyHeadID(w);
+		if(!head_verified) {return 0;}
+		// extract sector length from ID Field
+		w->intSectorLength = getSectorLengthFromID(w);
+		// printf("%d\n", w->intSectorLength);
+		if(!verifyCRCTypeII(w)) {return 0;}
+		// ID data is valid..
+		w->ID_data_verified = 1;
+		return 1;
+	}
 }
 
 /* this function reads the sector length field of the IDAM data and extracts

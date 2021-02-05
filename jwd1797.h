@@ -146,6 +146,7 @@ int ID_data_verified;
 /* used for the extracted value from the sector length ID field. Also used for
   the iteration of READING/WRITING bytes of a sector*/
 int intSectorLength;
+int all_bytes_inputted; // indictes when an entire data field has been read
 
 } JWD1797;
 
