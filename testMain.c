@@ -37,7 +37,7 @@ int main(int argc, char* argv[]) {
   // restore command test
   // restoreCommandTest(jwd1797, instruction_times);
   // SEEK command test
-  seekCommandTest(jwd1797, instruction_times);
+  // seekCommandTest(jwd1797, instruction_times);
   // STEP command test
   // stepCommandTest(jwd1797, instruction_times);
   // STEP-IN command test
@@ -45,7 +45,7 @@ int main(int argc, char* argv[]) {
   // STEP-OUT command test
   // stepOutCommandTest(jwd1797, instruction_times);
   // READ SECTOR command test
-  // readSectorTest(jwd1797, instruction_times);
+  readSectorTest(jwd1797, instruction_times);
 
   return 0;
 }

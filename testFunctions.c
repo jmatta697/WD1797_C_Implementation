@@ -515,44 +515,63 @@ void stepOutCommandTest(JWD1797* jwd1797, double instr_times[]) {
 }
 
 void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
-  int data_byte_read = 0;
-  int drq_high = 0;
-  // read first sector from disk
-  resetJWD1797(jwd1797);
   printf("\n\n%s\n", "-------------- READ SECTOR COMMAND TEST --------------");
-  // set HLD and HLT to high to test E delay timer
-  // jwd1797->HLD_pin = 1;
-  // jwd1797->HLT_pin = 1;
-  // load sector register to target a sector on the current track
-  writeJWD1797(jwd1797, 0xB2, 0b00000111);
-  // set track/track register to 0
-  jwd1797->current_track = 1;
-  jwd1797->trackRegister = 0b00000001;
-
-  // issue READ SECTOR command - SSO = 1, no 15ms delay, single record
-  writeJWD1797(jwd1797, 0xB0, 0b10011110);
-
+  resetJWD1797(jwd1797);
+  // isssue restore command
+  writeJWD1797(jwd1797, 0xB0, 0b00000000);
   for(int i = 0; i < 100000; i++) {
     // simulate random instruction time by picking from instruction_times list
     double instr_t = instr_times[rand()%7];
     // printf("%f\n", instr_t);
     doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
-    if((jwd1797->master_timer >= 14990 && jwd1797->master_timer <= 15010) ||
-      jwd1797->master_timer >= 59990) {
-        readSectorPrintHelper(jwd1797);
-        sleep(1);
+  }
+  printf("%s", "RESTORE STATUS: ");
+  print_bin8_representation(readJWD1797(jwd1797, 0xB0));
+  // // wait until not busy
+  // while((readJWD1797(jwd1797, 0xB0) & 1) == 1) {
+  //   printf("%s", "RESTORE STATUS: ");
+  //   print_bin8_representation(readJWD1797(jwd1797, 0xB0));
+  //   printf("\n");
+  //   usleep(100000); // delay loop iteration for observation
+  // }
+
+  /* create an array to hold up to 512 X 3 (1536) bytes to simulate reading
+  into memory */
+  unsigned char memory[512*3];
+  // initialize to all 0x00
+  for(int i = 0; i < 512*3; i++) {
+    memory[i] = 0x00;
+  }
+  // memory index pointer
+  int memory_index_ptr = 0;
+
+  // load the desired sector number into the SR
+  writeJWD1797(jwd1797, 0xB2, 0b00000001);
+  // issue READ SECTOR command - SSO = 0, 15ms delay, single record
+  writeJWD1797(jwd1797, 0xB0, 0b10001100);
+  for(int i = 0; i < 100000; i++) {
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+    if(jwd1797->master_timer >= 244980.200000 &&
+      jwd1797->new_byte_read_signal_) {
+      readSectorPrintHelper(jwd1797);
+      usleep(500000); // delay loop iteration for observation
     }
-    // if(jwd1797->master_timer >= 14990) {
-    //     readSectorPrintHelper(jwd1797);
-    //     sleep(1);
-    // }
-    // check if DRQ is high (check status bit S1)...
-    drq_high = ((readJWD1797(jwd1797, 0xB0)) >> 1)&1;
-    if(drq_high) {
-      // printf("%02X ", readJWD1797(jwd1797, 0xB3));
-      printf("\n%s%02X\n\n", "** BYTE READ from DR: ", readJWD1797(jwd1797, 0xB3));
+
+    // is there a drq request? check status bit 1..
+    if(((readJWD1797(jwd1797, 0xB0) >> 1) & 1) == 1) {
+      printf("%s%f\n", "MASTER CLOCK: ", jwd1797->master_timer);
+      // read the data register to get the byte read from disk
+      unsigned char r_byte = (unsigned char)(readJWD1797(jwd1797, 0xB3));
+      memory[memory_index_ptr] = r_byte;
+      memory_index_ptr++;
+      usleep(100000); // delay loop iteration for observation
     }
   }
+  printf("\n\n");
+  printByteArray(memory, 512*3);
 }
 
 void readAddressCommandTest(JWD1797* jwd1797) {
@@ -561,9 +580,29 @@ void readAddressCommandTest(JWD1797* jwd1797) {
 
 void readSectorPrintHelper(JWD1797* jwd1797) {
   printf("%s%f\n", "MASTER CLOCK: ", jwd1797->master_timer);
-  printf("%s%f\n", "HLT TIMER: ", jwd1797->HLT_timer);
   printf("%s%f\n", "E (15ms) DELAY TIMER: ", jwd1797->e_delay_timer);
-  printf("%s%f\n", "DATA BYTE ASSEMBLY CLOCK: ", jwd1797->assemble_data_byte_timer);
+  printf("%s%d\n", "E-Delay done: ", jwd1797->e_delay_done);
+  printf("%s%f\n", "HLT TIMER: ", jwd1797->HLT_timer);
+  printf("%s%d\n", "HLT_pin: ", jwd1797->HLT_pin);
+  printf("%s", "verify_operation_active: ");
+  printf("%d\n", jwd1797->verify_operation_active);
+  printf("%s", "Verify Index count: ");
+  printf("%d\n", jwd1797->verify_index_count);
+  if(jwd1797->new_byte_read_signal_) {
+    printf("%s", "byte read: ");
+    printf("%02X\n", getFDiskByte(jwd1797));
+  }
+  printf("%s", "0x00 count: ");
+  printf("%d\n", jwd1797->zero_byte_counter);
+  printf("%s", "Post 0x00 count search limit: ");
+  printf("%d\n", jwd1797->address_mark_search_count);
+  printf("%s", "0xA1 count: ");
+  printf("%d\n", jwd1797->a1_byte_counter);
+  printf("%s", "ID field Found: ");
+  printf("%d\n", jwd1797->id_field_found);
+  printf("%s", "ID Data Verified: ");
+  printf("%d\n", jwd1797->ID_data_verified);
+  // printf("%s%f\n", "DATA BYTE ASSEMBLY CLOCK: ", jwd1797->assemble_data_byte_timer);
   printf("%s%d\n", "DRQ: ", jwd1797->drq);
   printf("%s%02X\n", "DATA REGISTER: ", jwd1797->dataRegister);
   printf("%s", "SECTOR REGISTER: ");
@@ -571,6 +610,7 @@ void readSectorPrintHelper(JWD1797* jwd1797) {
   printf("%s\n", "");
   printf("%s", "TYPE II STATUS REGISTER: ");
   print_bin8_representation(jwd1797->statusRegister);
+  // typeIVerifyPrintHelper(jwd1797);
   printf("%s\n", "");
   printf("%s\n", "");
 }

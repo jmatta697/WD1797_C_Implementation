@@ -769,8 +769,7 @@ void setupTypeICommand(JWD1797* w) {
 	w->verify_operation_active = 0;
 	w->verify_index_count = 0;
 	w->zero_byte_counter = 0;
-	w->address_mark_search_count = 0;	/* after 16 bytes (MFM),
-		zero_byte_counter reset */
+	w->address_mark_search_count = 0;	/* after 16 bytes (MFM) */
 	w->a1_byte_counter = 0;	// look for three 0xA1 bytes
 	w->id_field_found = 0;
 	w->id_field_data_array_pt = 0;
@@ -821,8 +820,7 @@ void setupTypeIICommand(JWD1797* w) {
 	w->ID_data_verified = 0;
 	w->intSectorLength = 0;
 	w->zero_byte_counter = 0;
-	w->address_mark_search_count = 0;	/* after 16 bytes (MFM),
-		zero_byte_counter reset */
+	w->address_mark_search_count = 0;	/* after 16 bytes (MFM) */
 	w->a1_byte_counter = 0;	// look for three 0xA1 bytes
 	w->id_field_found = 0;
 	w->id_field_data_array_pt = 0;
@@ -874,9 +872,6 @@ void setupTypeIICommand(JWD1797* w) {
 	}
 
 	w->e_delay_timer = 0.0;
-	// w->command_typeII_timer = 0.0;
-	// add appropriate time based on E flag 15,000 us
-	// if(w->delay15ms) {w->command_typeII_timer += 15*1000;}
 }
 
 void setupTypeIIICommand(JWD1797* w) {
@@ -1501,7 +1496,7 @@ int collectIDFieldData(JWD1797* w) {
 	0 otherwise. */
 int verifyTrackID(JWD1797* w) {
 	if(w->trackRegister == w->id_field_data[0]) {
-		printf("\n%s\n\n", "TRACK VERIFIED!!");
+		// printf("\n%s\n\n", "TRACK VERIFIED!!");
 		return 1;
 	}
 	// track ID field != track register - keep searching
@@ -1574,6 +1569,28 @@ int verifyCRC(JWD1797* w) {
 		w->intrq = 1;
 		// e8259_set_irq0 (e8259_slave, 1);
 		// reset HLD idle timer
+		return 1;
+	}
+	else {
+		w->zero_byte_counter = 0;
+		w->address_mark_search_count = 0;
+		w->a1_byte_counter = 0;
+		w->id_field_found = 0;
+		w->id_field_data_collected = 0;
+		w->id_field_data_array_pt = 0;
+		// set CRC error in TYPE I status
+		w->statusRegister |= 0b00001000;
+		return 0;
+	}
+}
+
+int verifyCRCTypeII(JWD1797* w) {
+	// do the two CRC bytes equal the TEMP values of 0x01? (TEMP!!)
+	if(w->id_field_data[4] == 0x01 && w->id_field_data[5] == 0x01) {
+		printf("\n%s\n\n", "CRC VERIFIED!!");
+		// reset CRC error status
+		w->statusRegister &= 0b11110111;
+		w->verify_operation_active = 0;
 		return 1;
 	}
 	else {
@@ -1666,6 +1683,7 @@ int typeIICmdIDVerify(JWD1797* w) {
 			return 0;
 		}
 	}
+	// printByteArray(w->id_field_data, 6);
 	int track_verified = verifyTrackID(w);
 	if(!track_verified) {return 0;}
 	int sector_verified = verifySectorID(w);
@@ -1674,7 +1692,8 @@ int typeIICmdIDVerify(JWD1797* w) {
 	if(!head_verified) {return 0;}
 	// extract sector length from ID Field
 	w->intSectorLength = getSectorLengthFromID(w);
-	if(!verifyCRC(w)) {return 0;}
+	// printf("%d\n", w->intSectorLength);
+	if(!verifyCRCTypeII(w)) {return 0;}
 	// ID data is valid..
 	w->ID_data_verified = 1;
 	return 0;
