@@ -134,6 +134,9 @@ int address_mark_search_count;
 int id_field_found;
 int id_field_data_array_pt;
 int id_field_data_collected;
+int data_a1_byte_counter;
+int data_mark_search_count;
+int data_mark_found;
 /* collects ID Field data
   (0: cylinders, 1: head, 2: sector, 3: sector len, 4: CRC1, 5: CRC2) */
 unsigned char id_field_data[6];
@@ -181,3 +184,4 @@ void typeIVerifySequence(JWD1797*, double);
 int typeIICmdIDVerify(JWD1797*);
 int getSectorLengthFromID(JWD1797*);
 int handleEDelay(JWD1797*, double);
+int dataAddressMarkSearch(JWD1797*);

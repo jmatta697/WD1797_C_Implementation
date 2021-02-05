@@ -41,6 +41,8 @@
  	should be 16 bytes according to WD-1797 docs. After 16 bytes the search
 	for the next ID field starts over. */
 #define ID_FIELD_SEARCH_LIMIT 16
+/* In Double Density Disks, if 43 bytes pass before Data AM is found, INTRQ */
+#define DATA_AM_SEARCH_LIMIT 43
 
 // DOS disk format (bytes per format section and byte written for each section)
 #define GAP4A_LENGTH 80
@@ -197,6 +199,9 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->id_field_found = 0;
 	jwd_controller->id_field_data_array_pt = 0;
 	jwd_controller->id_field_data_collected = 0;
+	jwd_controller->data_a1_byte_counter = 0;
+	jwd_controller->data_mark_search_count = 0;
+	jwd_controller->data_mark_found = 0;
 	/* collects ID Field data
 	  (0: cylinders, 1: head, 2: sector, 3: sector len, 4: CRC1, 5: CRC2)
 		initialize all to 0x00 */
@@ -241,7 +246,9 @@ unsigned int readJWD1797(JWD1797* jwd_controller, unsigned int port_addr) {
 			/* if there is a byte waiting to be read from the data register
 				(DRQ pin high) because of a READ operation */
 			if(jwd_controller->currentCommandType == 2 && jwd_controller->drq) {
-				jwd_controller->drq = 0; // reset data request line
+				// reset data request line and status bit
+				jwd_controller->drq = 0;
+				jwd_controller->statusRegister &= 0b11111101;
 			}
 			break;
 		// control latch reg port (write)
@@ -280,6 +287,11 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 		// data reg port
 		case 0xb3:
 			jwd_controller->dataRegister = value;
+			if(jwd_controller->currentCommandType == 2 && jwd_controller->drq) {
+				// reset data request line and status bit
+				jwd_controller->drq = 0;
+				jwd_controller->statusRegister &= 0b11111101;
+			}
 			break;
 		// control latch port
 		case 0xb4:
@@ -329,6 +341,7 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 			if(w->statusRegister & 1 == 0) {w->HLD_idle_index_count++;}
 			// clock verify timeout counter
 			if(w->verify_operation_active) {w->verify_index_count++;}
+			else {w->verify_index_count = 0;}
 		}
 		/* make new byte read signal (internal) go high. This signals that a new
 			rotational byte has been encountered */
@@ -628,68 +641,79 @@ void commandStep(JWD1797* w, double us) {
 			// if ID data has not been verified, do not continue type II cmd
 			return;
 		}
-		// ID address mark data is valid.. now look for Data Address mark (DATA AM)
-		// @%@%@%@%@%@%@&@&@%@%@&@%@& TO DO - CONTINUE HERE *&*&*&%$$%%
-
-		// *** REVAMP THIS set start byte for reading/writing if not set already
-		// if(!w->start_byte_set) {
-		// 	w->disk_img_index_pointer = 0;	// @@@ FIX THIS!!!
-		// 	w->start_byte_set = 1;
-		// 	w->rw_start_byte = w->disk_img_index_pointer;
-		// }
-		// ****
+		// verify op is done
+		w->verify_operation_active = 0;
 
 		// READ SECTOR
 		if(w->currentCommandName == "READ SECTOR") {
-			w->assemble_data_byte_timer += us;	// clock byte read timer
-			// did the timer expire?
-			if(w->assemble_data_byte_timer >= ROTATIONAL_BYTE_READ_LIMIT) {
+			// ID address mark data is valid.. now look for Data Address mark (DATA AM)
+			if(!w->data_mark_found) {
+				if(w->new_byte_read_signal_) {
+					dataAddressMarkSearch(w);
+				}
+				return;
+			}
+
+			// ?? after DATA AM found, put reacord type in status bit 5 ??
+
+			// check if there is a new byte to read.. (ie. "assembled in DSR")
+			if(w->new_byte_read_signal_ && (w->intSectorLength > 0)) {
 				/* did computer read the last data byte in the DR? If DRQ is still high,
 					it did not; set lost data bit in status */
-				if(w->drq) {w->statusRegister |= 0b00000100;}
-				// continue to read bytes...
-				w->dataRegister = disk_content_array[w->disk_img_index_pointer];
+				if(w->drq == 1) {w->statusRegister |= 0b00000100;}
+				// last byte was read (DRQ = 0) reset lost data bit
+				else {w->statusRegister &= 0b11111011;}
+				// read current byte into data register
+				w->dataRegister = getFDiskByte(w);
+				// set drq and status drq status bit
 				w->drq = 1;
-				w->disk_img_index_pointer++;
-				w->assemble_data_byte_timer = 0.0;
-				// check if all sector bytes have been read
-				if((w->disk_img_index_pointer - w->rw_start_byte) >= w->sector_length) {
-					// check multiple records flag
-					if(w->multipleRecords) {
-						w->sectorRegister++;
-						// check if number of sectors have been exceeded
-						if(w->sectorRegister > w->sectors_per_track) {
-							// command is done
-							w->command_done = 1;
-							w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
-							w->HLD_idle_reset_timer = 0.0;
-							// assume verification operation is successful - generate interrupt
-							w->intrq = 1;
-							// e8259_set_irq0 (e8259_slave, 1);
-							return;
-						}
-						w->start_byte_set = 0;	// reset to start reading from the next sector
-					}
-					else {
-						// command is done
-						w->command_done = 1;
-						w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
-						w->HLD_idle_reset_timer = 0.0;
-						// assume verification operation is successful - generate interrupt
-						w->intrq = 1;
-						// e8259_set_irq0 (e8259_slave, 1);
-						return;
-					}
+				w->statusRegister |= 0b00000010;
+				// decrement data field byte counter
+				w->intSectorLength--;
+				return;
+			}
+
+			// check CRC *** the next two bytes..
+			//...
+
+			// check multiple records flag
+			if(w->multipleRecords) {
+				w->sectorRegister++;
+				// check if number of sectors have been exceeded
+				if(w->sectorRegister > w->sectors_per_track) {
+					// command is done
+					w->command_done = 1;
+					w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+					// w->HLD_idle_reset_timer = 0.0;
+					// assume verification operation is successful - generate interrupt
+					w->intrq = 1;
+					// e8259_set_irq0 (e8259_slave, 1);
+					return;
+				}
+				// if sector number not out of bounds, find next sector
+				else {
+					w->ID_data_verified = 0;
+					w->data_mark_found = 0;
+					return;
 				}
 			}
+			// command is done
+			w->command_done = 1;
+			w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+			// w->HLD_idle_reset_timer = 0.0;
+			// assume verification operation is successful - generate interrupt
+			w->intrq = 1;
+			// e8259_set_irq0 (e8259_slave, 1);
+			return;
 		} // END READ SECTOR
 
 		// WRITE SECTOR (*** NOT IMPLEMENTED - command completes without executing ***)
 		else if(w->currentCommandName == "WRITE SECTOR") {
+			printf("%s\n", "WD-1797 WRITE SECTOR NOT IMPLEMENTED!");
 			// command is done
 			w->command_done = 1;
 			w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
-			w->HLD_idle_reset_timer = 0.0;
+			// w->HLD_idle_reset_timer = 0.0;
 			// assume verification operation is successful - generate interrupt
 			// w->intrq = 1;
 			// e8259_set_irq0 (e8259_slave, 1);
@@ -716,10 +740,14 @@ void commandStep(JWD1797* w, double us) {
 		updateTG43Signal(w);
 
 		if(w->currentCommandName == "READ ADDRESS") {
-			printf("%s%lu", "Current disk image index pointer: ",
-				w->disk_img_index_pointer);
-		}
 
+		}
+		else if(w->currentCommandName == "READ TRACK") {
+
+		}
+		else if(w->currentCommandName == "WRITE TRACK") {
+
+		}
 	} // END TYPE III command
 
 }	// END general command step
@@ -799,6 +827,9 @@ void setupTypeIICommand(JWD1797* w) {
 	w->id_field_found = 0;
 	w->id_field_data_array_pt = 0;
 	w->id_field_data_collected = 0;
+	w->data_a1_byte_counter = 0;	// counter for 0xA1 bytes for data field
+	w->data_mark_search_count = 0;
+	w->data_mark_found = 0;
 
 	// set busy status
 	w->statusRegister |= 0b00000001;
@@ -1508,7 +1539,7 @@ int verifySectorID(JWD1797* w) {
 	field has been collected in a verify operation - will return 1 if matched,
 	0 otherwise. */
 int verifyHeadID(JWD1797* w) {
-	if(w->sso_pin == w->id_field_data[1]) {
+	if(w->updateSSO == w->id_field_data[1]) {
 		printf("\n%s\n\n", "HEAD/SIDE VERIFIED!!");
 		return 1;
 	}
@@ -1623,14 +1654,17 @@ int typeIICmdIDVerify(JWD1797* w) {
 	/* check if 5 index holes have passed -
 		if 1 is returned, process timed out, 0 -> continue with verification */
 	if(verifyIndexTimeout(w)) {return 1;}
-	// search for ID mark
-	if(!w->id_field_found) {
-		IDAddressMarkSearch(w);
-		return 0;
-	}
-	if(!w->id_field_data_collected) {
-		collectIDFieldData(w);
-		return 0;
+	// new byte available to read
+	if(w->new_byte_read_signal_) {
+		// search for ID mark
+		if(!w->id_field_found) {
+			IDAddressMarkSearch(w);
+			return 0;
+		}
+		if(!w->id_field_data_collected) {
+			collectIDFieldData(w);
+			return 0;
+		}
 	}
 	int track_verified = verifyTrackID(w);
 	if(!track_verified) {return 0;}
@@ -1665,4 +1699,54 @@ int getSectorLengthFromID(JWD1797* w) {
 		default:
 			printf("%s\n", "ERROR: Non-standard sector length!");
 	}
+}
+
+// returns 1 if ID address mark is found, otherwise returns 0
+int dataAddressMarkSearch(JWD1797* w) {
+	// get byte based on rotational byte and current track
+	unsigned char incoming_byte = getFDiskByte(w);
+	// look for 3 0xA1 bytes in a row
+	if(w->data_a1_byte_counter < DATA_AM_PREFIX_LENGTH) {
+		if(incoming_byte == 0xA1) {w->data_a1_byte_counter++; return 0;}
+		else {	// not 0xA1
+			w->data_a1_byte_counter = 0;
+			w->data_mark_search_count++;
+			// have 43 bytes passed without finding 3 consecutive 0xA1 and 0xFB (DATA AM)?
+			if(w->data_mark_search_count >= DATA_AM_SEARCH_LIMIT) {
+					// interrupt and terminate command..
+					w->command_done = 1;
+					w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+					w->statusRegister |= 0b00010000;	// set record-not found bit
+					// ** generate interrupt **
+					w->intrq = 1; // MUST SEND INTERRUPT to slave int controller also...
+					// e8259_set_irq0 (e8259_slave, 1);
+					return 0;
+			}
+			return 0;
+		}
+		return 0;
+	}
+	// look for 0xFB - if so, IDAM has been found
+	if(w->data_mark_found == 0 && incoming_byte == 0xFB) {
+		w->data_mark_found = 1;
+		return 1;
+	}
+	// the 3 0xA1 bytes were not followed by 0xFB - DATA AM not found
+	else {
+		w->data_a1_byte_counter = 0;
+		w->data_mark_search_count++;
+		// have 43 bytes passed without finding 3 consecutive 0xA1 and 0xFB (DATA AM)?
+		if(w->data_mark_search_count >= DATA_AM_SEARCH_LIMIT) {
+				// interrupt and terminate command..
+				w->command_done = 1;
+				w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+				w->statusRegister |= 0b00010000;	// set record-not found bit
+				// ** generate interrupt **
+				w->intrq = 1; // MUST SEND INTERRUPT to slave int controller also...
+				// e8259_set_irq0 (e8259_slave, 1);
+				return 0;
+		}
+		return 0;
+	}
+	return 0;
 }
