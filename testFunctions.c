@@ -569,15 +569,15 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
   int memory_index_ptr = 0;
 
   // load the desired sector number into the SR
-  writeJWD1797(jwd1797, 0xB2, 0b00000010);
+  writeJWD1797(jwd1797, 0xB2, 0b00000111);
   // issue READ SECTOR command - SSO = 0, 15ms delay, single record
-  writeJWD1797(jwd1797, 0xB0, 0b10001100);
+  writeJWD1797(jwd1797, 0xB0, 0b10011110);
   for(int i = 0; i < 300000; i++) {
     // simulate random instruction time by picking from instruction_times list
     double instr_t = instr_times[rand()%7];
     // printf("%f\n", instr_t);
     doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
-    if(jwd1797->new_byte_read_signal_ && jwd1797->id_field_data[2] == 2 &&
+    if(jwd1797->new_byte_read_signal_ && jwd1797->id_field_data[2] >= 7 &&
       ((jwd1797->statusRegister)&1)) {
       readSectorPrintHelper(jwd1797);
       usleep(100000); // delay loop iteration for observation

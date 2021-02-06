@@ -714,6 +714,8 @@ void commandStep(JWD1797* w, double us) {
 					w->all_bytes_inputted = 0;
 					return;
 				}
+				printf("%s\n", "ERROR: SOMETHING WENT WRONG WITH READING MULTIPLE SECTORS");
+				return;
 			}
 			// command is done
 			w->command_done = 1;
