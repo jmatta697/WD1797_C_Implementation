@@ -672,7 +672,10 @@ void seekTestPrintHelper(JWD1797* jwd1797) {
   printf("%s", "DATA REGISTER: ");
   print_bin8_representation(jwd1797->dataRegister);
   printf("%s\n", "");
-  printf("%s", "TYPE I STATUS REGISTER: ");
+  printf("%s", "SECTOR REGISTER: ");
+  print_bin8_representation(jwd1797->sectorRegister);
+  printf("%s\n", "");
+  printf("%s", "TYPE STATUS REGISTER: ");
   print_bin8_representation(jwd1797->statusRegister);
   typeIVerifyPrintHelper(jwd1797);
   printf("%s\n", "");
@@ -716,4 +719,87 @@ void getFByteTest(JWD1797* jwd1797, double instr_times[]) {
       usleep(50000);
     }
   }
+}
+
+void readAddressTest(JWD1797* jwd1797, double instr_times[]) {
+  printf("\n\n%s\n", "-------------- READ ADDRESS COMMAND TEST --------------");
+  resetJWD1797(jwd1797);
+  seekTestPrintHelper(jwd1797);
+  /*SEEK*/
+  // set data register to target track 2
+  writeJWD1797(jwd1797, 0xB3, 0b00000010);
+  // isssue seek command to seek track 2
+  writeJWD1797(jwd1797, 0xB0, 0b00011011);
+  for(int i = 0; i < 500000; i++) {
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+  }
+  seekTestPrintHelper(jwd1797);
+  /*REA*/
+  // now at track 2 - read next address using read address command
+  // isssue read address command at current track
+  writeJWD1797(jwd1797, 0xB0, 0b11000100);
+  for(int i = 0; i < 200000; i++) {
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+    // is there a drq request? check status bit 1..
+    if(jwd1797->e_delay_done && jwd1797->new_byte_read_signal_ &&
+      jwd1797->rotational_byte_pointer > 1398 &&
+      jwd1797->rotational_byte_pointer <= 1439) {
+      readSectorPrintHelper(jwd1797);
+      usleep(500000); // delay loop iteration for observation
+      // read
+      if(((readJWD1797(jwd1797, 0xB0) >> 1) & 1) == 1) {
+        // readSectorPrintHelper(jwd1797);
+        // usleep(100000); // delay loop iteration for observation
+        readJWD1797(jwd1797, 0xB3);
+      }
+    }
+  }
+  usleep(2000000);
+  for(int i = 0; i < 500000; i++) {
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+  }
+  usleep(2000000);
+  // seekTestPrintHelper(jwd1797);
+  // set data register to target track 6
+  writeJWD1797(jwd1797, 0xB3, 0b00000110);
+  // isssue seek command to seek track 6
+  writeJWD1797(jwd1797, 0xB0, 0b00011011);
+  for(int i = 0; i < 1000000; i++) {
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+  }
+  // now at track 6 - read next address using read address command
+  // isssue read address command at current track
+  writeJWD1797(jwd1797, 0xB0, 0b11000100);
+  for(int i = 0; i < 200000; i++) {
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+    // is there a drq request? check status bit 1..
+    if(jwd1797->e_delay_done && jwd1797->new_byte_read_signal_ &&
+      jwd1797->rotational_byte_pointer > 0) {
+      readSectorPrintHelper(jwd1797);
+      usleep(500000); // delay loop iteration for observation
+      // read
+      if(((readJWD1797(jwd1797, 0xB0) >> 1) & 1) == 1) {
+        // readSectorPrintHelper(jwd1797);
+        // usleep(100000); // delay loop iteration for observation
+        readJWD1797(jwd1797, 0xB3);
+      }
+    }
+  }
+  seekTestPrintHelper(jwd1797);
+
 }

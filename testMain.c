@@ -45,7 +45,9 @@ int main(int argc, char* argv[]) {
   // STEP-OUT command test
   // stepOutCommandTest(jwd1797, instruction_times);
   // READ SECTOR command test
-  readSectorTest(jwd1797, instruction_times);
+  // readSectorTest(jwd1797, instruction_times);
+  // READ ADDRESS command test
+  readAddressTest(jwd1797, instruction_times);
 
   return 0;
 }

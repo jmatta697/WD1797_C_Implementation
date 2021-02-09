@@ -211,6 +211,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->ID_data_verified = 0;
 	jwd_controller->intSectorLength = 0;
 	jwd_controller->all_bytes_inputted = 0;
+	jwd_controller->IDAM_byte_count = 0;
 
 	// disk_content_array = diskImageToCharArray("z-dos-1.img", jwd_controller);
 	// TEST disk image to array function
@@ -232,6 +233,8 @@ unsigned int readJWD1797(JWD1797* jwd_controller, unsigned int port_addr) {
 		// status reg port
 		case 0xb0:
 			r_val = jwd_controller->statusRegister;
+			// reset INTRQ when status register is read
+			jwd_controller->intrq = 0;
 			break;
 		// track reg port
 		case 0xb1:
@@ -246,7 +249,10 @@ unsigned int readJWD1797(JWD1797* jwd_controller, unsigned int port_addr) {
 			r_val = jwd_controller->dataRegister;
 			/* if there is a byte waiting to be read from the data register
 				(DRQ pin high) because of a READ operation */
-			if(jwd_controller->currentCommandType == 2 && jwd_controller->drq) {
+			if((jwd_controller->currentCommandName == "READ SECTOR" ||
+				jwd_controller->currentCommandName == "READ ADDRESS" ||
+				jwd_controller->currentCommandName == "READ TRACK")
+			 	&& jwd_controller->drq) {
 				// reset data request line and status bit
 				jwd_controller->drq = 0;
 				jwd_controller->statusRegister &= 0b11111101;
@@ -270,11 +276,12 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 	// printf("\nWrite ");
 	// print_bin8_representation(value);
 	// printf("%s%X\n\n", " to wd1797/port: ", port_addr);
-
 	switch(port_addr) {
 		// command reg port
 		case 0xb0:
 			jwd_controller->commandRegister = value;
+			// reset INTRQ when command register is written to
+			jwd_controller->intrq = 0;
 			doJWD1797Command(jwd_controller);
 			break;
 		// track reg port
@@ -288,7 +295,9 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 		// data reg port
 		case 0xb3:
 			jwd_controller->dataRegister = value;
-			if(jwd_controller->currentCommandType == 2 && jwd_controller->drq) {
+			if((jwd_controller->currentCommandName == "WRITE SECTOR" ||
+				jwd_controller->currentCommandName == "WRITE TRACK")
+			 	&& jwd_controller->drq) {
 				// reset data request line and status bit
 				jwd_controller->drq = 0;
 				jwd_controller->statusRegister &= 0b11111101;
@@ -729,7 +738,7 @@ void commandStep(JWD1797* w, double us) {
 
 		// WRITE SECTOR (*** NOT IMPLEMENTED - command completes without executing ***)
 		else if(w->currentCommandName == "WRITE SECTOR") {
-			printf("%s\n", "WD-1797 WRITE SECTOR NOT IMPLEMENTED!");
+			printf("%s\n", "@@ ** WD-1797 WRITE SECTOR NOT IMPLEMENTED! ** @@");
 			// command is done
 			w->command_done = 1;
 			w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
@@ -760,13 +769,64 @@ void commandStep(JWD1797* w, double us) {
 		updateTG43Signal(w);
 
 		if(w->currentCommandName == "READ ADDRESS") {
+			/* if ID address mark has not been found yet, verify active so that
+				index timeout count is incremented in doJWD1797Cycle() */
+			if(!w->id_field_found) {
+				w->verify_operation_active = 1;	// verify operation = IDAM detection
+				// new byte available?
+				if(w->new_byte_read_signal_) {
+					// continue search for IDAM...
+					IDAddressMarkSearch(w);
+				}
+				// check if index pass timed out..
+				verifyIndexTimeout(w, 6);
+				return;
+			}
+			else {w->verify_operation_active = 0;}
+
+			// still collecting IDAM bytes.. new byte available?
+			if(w->IDAM_byte_count < 6) {
+				if(w->new_byte_read_signal_) {
+					w->dataRegister = getFDiskByte(w);
+					w->id_field_data[w->IDAM_byte_count] = w->dataRegister;
+					w->drq = 1;
+					w->statusRegister |= 0b00000010;
+					w->IDAM_byte_count++;
+					return;
+				}
+				return;
+			}
+			// tansfer track IDAM data byte to sector register
+			w->sectorRegister = w->id_field_data[0];
+			if(verifyCRC(w)) {
+				return;
+			}
+			else {
+				// command is done
+				w->command_done = 1;
+				w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+				// w->HLD_idle_reset_timer = 0.0;
+				// assume verification operation is successful - generate interrupt
+				w->intrq = 1;
+				// e8259_set_irq0 (e8259_slave, 1);
+				// reset HLD idle timer
+				return;
+			}
 
 		}
 		else if(w->currentCommandName == "READ TRACK") {
 
 		}
 		else if(w->currentCommandName == "WRITE TRACK") {
-
+			printf("%s\n", "@@ ** WD-1797 WRITE TRACK NOT IMPLEMENTED! ** @@");
+			// command is done
+			w->command_done = 1;
+			w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+			// w->HLD_idle_reset_timer = 0.0;
+			// assume verification operation is successful - generate interrupt
+			// w->intrq = 1;
+			// e8259_set_irq0 (e8259_slave, 1);
+			return;
 		}
 	} // END TYPE III command
 
@@ -857,7 +917,7 @@ void setupTypeIICommand(JWD1797* w) {
 	// reset drq/lost data/record not found/bits 5, 6 in status register
 	w->statusRegister &= 0b10001001;
 	// reset INT request line
-	w->intrq = 0;
+	// w->intrq = 0;
 	// e8259_set_irq0 (e8259_slave, 0);
 
 	// sample READY input from DRIVE
@@ -891,7 +951,6 @@ void setupTypeIICommand(JWD1797* w) {
 		w->HLT_pin = 0;
 		w->HLD_idle_reset_timer = 0.0;
 	}
-
 	w->e_delay_timer = 0.0;
 }
 
@@ -899,6 +958,7 @@ void setupTypeIIICommand(JWD1797* w) {
 	w->currentCommandType = 3;
 	w->command_done = 0;
 	w->e_delay_done = 0;
+	w->id_field_found = 0;
 	// set busy status
 	w->statusRegister |= 1;
 	/* reset status bits 2 (lost data), 4 (record not found),
@@ -928,8 +988,9 @@ void setupTypeIIICommand(JWD1797* w) {
 		w->HLD_pin = 1;
 		// one shot from HLD pin resets HLT pin
 		w->HLT_pin = 0;
-		w->HLD_idle_reset_timer = 0.0;
+		// w->HLD_idle_reset_timer = 0.0;
 	}
+	w->e_delay_timer = 0.0;
 }
 
 void setupForcedIntCommand(JWD1797* w) {
@@ -1039,6 +1100,7 @@ void setTypeIIICommand(JWD1797* w) {
 	if(cmdID == 12) {
 		w->currentCommandName = "READ ADDRESS";
 		printf("%s command in WD1797 command register\n", w->currentCommandName);
+		w->IDAM_byte_count = 0;	// count to collect IDAM bytes
 	}
 	// READ TRACK
 	else if(cmdID == 14) {
@@ -1063,7 +1125,7 @@ void typeIStatusReset(JWD1797* w) {
 	w->statusRegister &= 0b11100111;
 	// reset DRQ, INTRQ pins
 	w->drq = 0;
-	w->intrq = 0;
+	// w->intrq = 0;
 }
 
 void printBusyMsg() {
@@ -1436,10 +1498,11 @@ void handleVerifyHeadSettleDelay(JWD1797* w, double us) {
 }
 
 /* returns 1 if verify sequnce times out after 5 index holes have passed while
- 	looking for an ID address mark. Otherwise, retunrs 0 */
-int verifyIndexTimeout(JWD1797* w) {
-	// check if 5 index holes have passed
-	if(w->verify_index_count >= 5) {
+ 	looking for an ID address mark. Otherwise, retunrs 0. X paramenter is the
+	limit that is checked. */
+int verifyIndexTimeout(JWD1797* w, int x) {
+	// check if X index holes have passed
+	if(w->verify_index_count >= x) {
 		printf("%s\n", "VERIFY INDEX TIMED OUT!");
 		w->verify_operation_active = 0;
 		// command is done
@@ -1643,7 +1706,7 @@ void typeIVerifySequence(JWD1797* w, double us) {
 			// do verification operation...
 			w->verify_operation_active = 1;
 			// check if 5 index holes have passed
-			if(verifyIndexTimeout(w)) {return;}
+			if(verifyIndexTimeout(w, 5)) {return;}
 			// new byte available to read
 			if(w->new_byte_read_signal_) {
 				// search for ID Address field if not already found
@@ -1695,7 +1758,7 @@ int handleEDelay(JWD1797* w, double us) {
 int typeIICmdIDVerify(JWD1797* w) {
 	/* check if 5 index holes have passed -
 		if 1 is returned, process timed out, 0 -> continue with verification */
-	if(verifyIndexTimeout(w)) {return 0;}
+	if(verifyIndexTimeout(w, 5)) {return 0;}
 	// new byte available to read
 	if(w->new_byte_read_signal_) {
 		// search for ID mark

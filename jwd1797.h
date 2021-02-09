@@ -147,6 +147,7 @@ int ID_data_verified;
   the iteration of READING/WRITING bytes of a sector*/
 int intSectorLength;
 int all_bytes_inputted; // indictes when an entire data field has been read
+int IDAM_byte_count;  // count for collecting the 6 IDAM bytes for READ ADDRESS
 
 } JWD1797;
 
@@ -177,7 +178,7 @@ char* diskImageToCharArray(char*, JWD1797*);
 void assembleFormattedDiskArray(JWD1797*, char*);
 unsigned char getFDiskByte(JWD1797*);
 void handleVerifyHeadSettleDelay(JWD1797*, double);
-int verifyIndexTimeout(JWD1797*);
+int verifyIndexTimeout(JWD1797*, int);
 int IDAddressMarkSearch(JWD1797*);
 int verifyTrackID(JWD1797*);
 int collectIDFieldData(JWD1797*);
@@ -186,3 +187,4 @@ int typeIICmdIDVerify(JWD1797*);
 int getSectorLengthFromID(JWD1797*);
 int handleEDelay(JWD1797*, double);
 int dataAddressMarkSearch(JWD1797*);
+int verifyCRC(JWD1797*);
