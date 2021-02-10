@@ -112,7 +112,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->CRCRegister = 0b00000000;
 
 	jwd_controller->disk_img_index_pointer = 0;
-	jwd_controller->rotational_byte_pointer = 6390;	// start at a few bytes before 0 index
+	jwd_controller->rotational_byte_pointer = 6000;	// start at a few bytes before 0 index
 	jwd_controller->rw_start_byte = 0;
 
 	// jwd_controller->ready = 0;	// start drive not ready
@@ -205,13 +205,12 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	/* collects ID Field data
 	  (0: cylinders, 1: head, 2: sector, 3: sector len, 4: CRC1, 5: CRC2)
 		initialize all to 0x00 */
-	for(int i = 0; i < 6; i++) {
-		jwd_controller->id_field_data[i] = 0x00;
-	}
+	for(int i = 0; i < 6; i++) {jwd_controller->id_field_data[i] = 0x00;}
 	jwd_controller->ID_data_verified = 0;
 	jwd_controller->intSectorLength = 0;
 	jwd_controller->all_bytes_inputted = 0;
 	jwd_controller->IDAM_byte_count = 0;
+	jwd_controller->start_track_read_ = 0;
 
 	// disk_content_array = diskImageToCharArray("z-dos-1.img", jwd_controller);
 	// TEST disk image to array function
@@ -347,8 +346,9 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 		// when the last byte of the track is read, signal the start of the index pulse
 		if(w->rotational_byte_pointer == (w->actual_num_track_bytes - 1)) {
 			w->track_start_signal_ = 1;
+			// printf("%s\n", "Beginning of Track");
 			// command execution idle - clock HLD idle index counter
-			if(w->statusRegister & 1 == 0) {w->HLD_idle_index_count++;}
+			if((w->statusRegister & 1) == 0) {w->HLD_idle_index_count++;}
 			else {w->HLD_idle_index_count = 0;}
 			// clock verify timeout counter
 			if(w->verify_operation_active) {w->verify_index_count++;}
@@ -812,11 +812,47 @@ void commandStep(JWD1797* w, double us) {
 				// reset HLD idle timer
 				return;
 			}
-
 		}
+
 		else if(w->currentCommandName == "READ TRACK") {
+			// wait for index pulse
+			if(!w->start_track_read_) {
+				// is there an index pulse?
+				if(w->index_pulse_pin) {
+					w->start_track_read_ = 1;
+				}
+				return;
+			}
+			// new byte available?
+			if(w->new_byte_read_signal_) {
+				/* did computer read the last data byte in the DR? If DRQ is still high,
+					it did not; set lost data bit in status */
+				if(w->drq == 1) {w->statusRegister |= 0b00000100;}
+				// last byte was read (DRQ = 0) reset lost data bit
+				else {w->statusRegister &= 0b11111011;}
+				// read current byte into data register
+				w->dataRegister = getFDiskByte(w);
+				// set drq and status drq status bit
+				w->drq = 1;
+				w->statusRegister |= 0b00000010;
+				/* is there an index pulse? Wait until after GAP 4a has passed (80 x 0x4E)
+					before starting to look for another index pulse */
+				if((w->rotational_byte_pointer > 80) && (w->index_pulse_pin)) {
+					// command is done
+					w->command_done = 1;
+					w->statusRegister &= 0b11111110;	// reset (clear) busy status bit
+					// w->HLD_idle_reset_timer = 0.0;
+					// assume verification operation is successful - generate interrupt
+					w->intrq = 1;
+					// e8259_set_irq0 (e8259_slave, 1);
+					// reset HLD idle timer
+					return;
+				}
+				return;
+			}
 
 		}
+
 		else if(w->currentCommandName == "WRITE TRACK") {
 			printf("%s\n", "@@ ** WD-1797 WRITE TRACK NOT IMPLEMENTED! ** @@");
 			// command is done
@@ -1106,6 +1142,7 @@ void setTypeIIICommand(JWD1797* w) {
 	else if(cmdID == 14) {
 		w->currentCommandName = "READ TRACK";
 		printf("%s command in WD1797 command register\n", w->currentCommandName);
+		w->start_track_read_ = 0;
 	}
 	// WRITE TRACK
 	else if(cmdID == 15) {

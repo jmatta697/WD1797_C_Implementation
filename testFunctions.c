@@ -10,6 +10,7 @@ void restoreTestPrintHelper(JWD1797*);
 void readSectorPrintHelper(JWD1797*);
 void typeIVerifyPrintHelper(JWD1797*);
 void seekTestPrintHelper(JWD1797*);
+void readTrackTestPrintHelper(JWD1797*);
 
 /* ------------- TEST FUNCTIONS ---------------- */
 
@@ -801,6 +802,71 @@ void readAddressTest(JWD1797* jwd1797, double instr_times[]) {
     }
   }
   seekTestPrintHelper(jwd1797);
+}
 
+void readTrackTest(JWD1797* jwd1797, double instr_times[]) {
+  printf("\n\n%s\n", "-------------- READ TRACK COMMAND TEST --------------");
+  resetJWD1797(jwd1797);
+  seekTestPrintHelper(jwd1797);
+  /*SEEK*/
+  // set data register to target track 2
+  writeJWD1797(jwd1797, 0xB3, 0b00000010);
+  // isssue seek command to seek track 2 - load head
+  writeJWD1797(jwd1797, 0xB0, 0b00011011);
+  for(int i = 0; i < 5000000; i++) {
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+    // if(i%1000 == 0) {
+    //   printf("%s%d\n", "IDLE HLT count: ", jwd1797->HLD_idle_index_count);
+    //   printf("%lu\n", jwd1797->rotational_byte_pointer);
+    //   usleep(250000);
+    // }
+  }
+  readTrackTestPrintHelper(jwd1797);
+  usleep(1000000);
+
+  // isssue read track command to seek track 2 - load head
+  writeJWD1797(jwd1797, 0xB0, 0b11100100);
+  for(int i = 0; i < 5000000; i++) {
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+    if(jwd1797->new_byte_read_signal_) {readTrackTestPrintHelper(jwd1797);}
+    usleep(10000);
+    // if(i%1000 == 0) {
+    //   // printf("%s%d\n", "start_track_read_ =  ", jwd1797->start_track_read_);
+    //   // printf("%lu\n", jwd1797->rotational_byte_pointer);
+    //   if(jwd1797->new_byte_read_signal_) {readTrackTestPrintHelper(jwd1797);}
+    //   usleep(500000);
+    // }
+  }
+}
+
+void readTrackTestPrintHelper(JWD1797* jwd1797) {
+  printf("%s", "MASTER CLOCK: ");
+  printf("%f\n", jwd1797->master_timer);
+  printf("%s", "TYPE STATUS REGISTER: ");
+  print_bin8_representation(jwd1797->statusRegister);
+  printf("%s\n", "");
+  printf("%s", "TRACK REGISTER: ");
+  print_bin8_representation(jwd1797->trackRegister);
+  printf("%s\n", "");
+  printf("%s", "DATA REGISTER: ");
+  print_bin8_representation(jwd1797->dataRegister);
+  printf("%s\n", "");
+  printf("%s", "SECTOR REGISTER: ");
+  print_bin8_representation(jwd1797->sectorRegister);
+  printf("%s\n", "");
+  printf("%s%d\n", "Start track read = ", jwd1797->start_track_read_);
+  if(jwd1797->new_byte_read_signal_) {
+    printf("%s%lu\n", "Rotational byte ptr: ", jwd1797->rotational_byte_pointer);
+    printf("%s", "byte read: ");
+    printf("%02X\n", getFDiskByte(jwd1797));
+  }
+  printf("%s\n", "");
+  printf("%s\n", "");
 }
 // end tests

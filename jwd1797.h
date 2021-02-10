@@ -148,6 +148,7 @@ int ID_data_verified;
 int intSectorLength;
 int all_bytes_inputted; // indictes when an entire data field has been read
 int IDAM_byte_count;  // count for collecting the 6 IDAM bytes for READ ADDRESS
+int start_track_read_;
 
 } JWD1797;
 

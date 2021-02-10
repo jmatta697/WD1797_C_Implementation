@@ -10,4 +10,5 @@ void stepInCommandTest(JWD1797*, double[]);
 void stepOutCommandTest(JWD1797*, double[]);
 void readSectorTest(JWD1797*, double[]);
 void readAddressTest(JWD1797*, double[]);
+void readTrackTest(JWD1797*, double[]);
 void getFByteTest(JWD1797*, double[]);
