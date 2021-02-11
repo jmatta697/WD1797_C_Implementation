@@ -234,6 +234,11 @@ unsigned int readJWD1797(JWD1797* jwd_controller, unsigned int port_addr) {
 			r_val = jwd_controller->statusRegister;
 			// reset INTRQ when status register is read
 			jwd_controller->intrq = 0;
+			// clear all forced interrupt flags except INTERRUPT IMMEDIATE (0xD8)
+			jwd_controller->interruptNRtoR = 0;
+			jwd_controller->interruptRtoNR = 0;
+			jwd_controller->interruptIndexPulse = 0;
+			jwd_controller->terminate_command = 0;
 			break;
 		// track reg port
 		case 0xb1:
@@ -281,6 +286,16 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 			jwd_controller->commandRegister = value;
 			// reset INTRQ when command register is written to
 			jwd_controller->intrq = 0;
+			// clear all forced interrupt flags except INTERRUPT IMMEDIATE (0xD8)
+			jwd_controller->interruptNRtoR = 0;
+			jwd_controller->interruptRtoNR = 0;
+			jwd_controller->interruptIndexPulse = 0;
+			jwd_controller->terminate_command = 0;
+			/* clear INTERRUPT IMMEDIATE flag ONLY if forced int 0xD0 command is
+				received */
+			if(value == 0xD0) {
+				jwd_controller->interruptImmediate = 0;
+			}
 			doJWD1797Command(jwd_controller);
 			break;
 		// track reg port
@@ -333,6 +348,50 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 	if(w->current_track == 0) {w->not_track00_pin = 0;}
 	else {w->not_track00_pin = 1;}
 
+	/* check if there is a forced intr 0xD0
+		(NO INTRQ - terminate command immediately) */
+	if(w->terminate_command) {
+		// is there a command currently running?
+		if(!w->command_done) {	// YES
+			// terminate command
+			w->command_done = 1;
+			// reset BUSY status bit ONLY - other status bits are unchanged
+			w->statusRegister &= 0b11111110;
+		}
+		else {	// NO command running
+			/* reset busy status and clear SEEK ERROR and CRC ERROR bits
+				(reflect TYPE I status) */
+			w->statusRegister &= 0b11100110; // reset NOT READY bit
+			// change command type to I in order to update TYPE I status bits
+			w->currentCommandType = 1;
+		}
+	}
+
+	/* check if there is a forced intr 0xD8 (INTRQ & terminate command immediately)
+		(can be combined with other conditions) */
+	if(w->interruptImmediate) {
+		// is there a command currently running?
+		if(!w->command_done) {	// YES
+			// terminate command
+			w->command_done = 1;
+			// reset BUSY status bit ONLY - other status bits are unchanged
+			w->statusRegister &= 0b11111110;
+			// generate interrupt
+			w->intrq = 1;
+			// e8259_set_irq0 (e8259_slave, 1);
+		}
+		else {	// NO command running
+			/* reset busy status and clear SEEK ERROR and CRC ERROR bits
+				(reflect TYPE I status) */
+			w->statusRegister &= 0b11100110; // reset NOT READY bit
+			// change command type to I in order to update TYPE I status bits
+			w->currentCommandType = 1;
+			// generate interrupt
+			w->intrq = 1;
+			// e8259_set_irq0 (e8259_slave, 1);
+		}
+	}
+
 	// reset new byte signal every WD1797 clock cycle
 	w->new_byte_read_signal_ = 0;
 	// clock the rotational byte timer
@@ -343,8 +402,8 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 		w->rotational_byte_pointer =
 			(w->rotational_byte_pointer + 1) % w->actual_num_track_bytes;
 		// printf("%lu\n", w->rotational_byte_pointer);
-		// when the last byte of the track is read, signal the start of the index pulse
-		if(w->rotational_byte_pointer == (w->actual_num_track_bytes - 1)) {
+		// when the first byte of the track is read, signal the start of the index pulse
+		if(w->rotational_byte_pointer == 0) {
 			w->track_start_signal_ = 1;
 			// printf("%s\n", "Beginning of Track");
 			// command execution idle - clock HLD idle index counter
@@ -359,6 +418,32 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 		w->new_byte_read_signal_ = 1;
 		// reset timer
 		w->rotational_byte_read_timer = 0.0;
+	}
+
+	/* is it the start of a new track (rising edge of IP? = track_start_signal_)
+		-- with a IP forced interrupt? */
+	if(w->track_start_signal_ && w->interruptIndexPulse) {
+		printf("%s\n", "IP interrupt condition met..");
+		// is there a command currently running?
+		if(!w->command_done) {	// YES
+			// terminate command
+			w->command_done = 1;
+			// reset BUSY status bit ONLY - other status bits are unchanged
+			w->statusRegister &= 0b11111110;
+			// generate interrupt
+			w->intrq = 1;
+			// e8259_set_irq0 (e8259_slave, 1);
+		}
+		else {	// NO command running
+			/* reset busy status and clear SEEK ERROR and CRC ERROR bits
+				(reflect TYPE I status) */
+			w->statusRegister &= 0b11100110; // reset NOT READY bit
+			// change command type to I in order to update TYPE I status bits
+			w->currentCommandType = 1;
+			// generate interrupt
+			w->intrq = 1;
+			// e8259_set_irq0 (e8259_slave, 1);
+		}
 	}
 
 	handleIndexPulse(w, us);
@@ -815,26 +900,16 @@ void commandStep(JWD1797* w, double us) {
 		}
 
 		else if(w->currentCommandName == "READ TRACK") {
+			// is there an index pulse?
+			if(w->index_pulse_pin) {
+				w->start_track_read_ = 1;
+			}
 			// wait for index pulse
 			if(!w->start_track_read_) {
-				// is there an index pulse?
-				if(w->index_pulse_pin) {
-					w->start_track_read_ = 1;
-				}
 				return;
 			}
 			// new byte available?
 			if(w->new_byte_read_signal_) {
-				/* did computer read the last data byte in the DR? If DRQ is still high,
-					it did not; set lost data bit in status */
-				if(w->drq == 1) {w->statusRegister |= 0b00000100;}
-				// last byte was read (DRQ = 0) reset lost data bit
-				else {w->statusRegister &= 0b11111011;}
-				// read current byte into data register
-				w->dataRegister = getFDiskByte(w);
-				// set drq and status drq status bit
-				w->drq = 1;
-				w->statusRegister |= 0b00000010;
 				/* is there an index pulse? Wait until after GAP 4a has passed (80 x 0x4E)
 					before starting to look for another index pulse */
 				if((w->rotational_byte_pointer > 80) && (w->index_pulse_pin)) {
@@ -848,9 +923,18 @@ void commandStep(JWD1797* w, double us) {
 					// reset HLD idle timer
 					return;
 				}
+				/* did computer read the last data byte in the DR? If DRQ is still high,
+					it did not; set lost data bit in status */
+				if(w->drq == 1) {w->statusRegister |= 0b00000100;}
+				// last byte was read (DRQ = 0) reset lost data bit
+				else {w->statusRegister &= 0b11111011;}
+				// read current byte into data register
+				w->dataRegister = getFDiskByte(w);
+				// set drq and status drq status bit
+				w->drq = 1;
+				w->statusRegister |= 0b00000010;
 				return;
 			}
-
 		}
 
 		else if(w->currentCommandName == "WRITE TRACK") {
@@ -1031,15 +1115,17 @@ void setupTypeIIICommand(JWD1797* w) {
 
 void setupForcedIntCommand(JWD1797* w) {
 	/* %%%%%% DEBUG/TESTING - clear all interrupt flags here  */
-	w->interruptNRtoR = 0;
-	w->interruptRtoNR = 0;
-	w->interruptIndexPulse = 0;
-	w->interruptImmediate = 0;
+	// w->interruptNRtoR = 0;
+	// w->interruptRtoNR = 0;
+	// w->interruptIndexPulse = 0;
+	// w->interruptImmediate = 0;
 	// %%%%%%% DEBUG ABOVE ^^^^
 	printf("TYPE IV Command in WD1797 command register (Force Interrupt)..\n");
-	w->currentCommandType = 4;
-	// get the interrupt condition bits (I0-I3) - the lowest 4 bits of the interrupt command
-	int int_condition_bits = w->commandRegister & 15;
+	// w->currentCommandType = 4;
+	// w->currentCommandName = "FORCED INTR";
+	/* get the interrupt condition bits (I0-I3) -
+	the lowest 4 bits of the interrupt command */
+	unsigned char int_condition_bits = w->commandRegister & 0b00001111;
 	// set interrupt condition(s)
 	if(int_condition_bits & 1) {
 		printf("%s\n", "INTRQ on NOT READY to READY transition");

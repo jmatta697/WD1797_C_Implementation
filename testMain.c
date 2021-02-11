@@ -49,7 +49,7 @@ int main(int argc, char* argv[]) {
   // READ ADDRESS command test
   // readAddressTest(jwd1797, instruction_times);
   // READ TRACK command test
-  readTrackTest(jwd1797, instruction_times);
+  // readTrackTest(jwd1797, instruction_times);
 
   return 0;
 }

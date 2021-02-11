@@ -170,7 +170,10 @@ void indexPulseTest(JWD1797* jwd1797, double instr_times[]) {
     double instr_t = instr_times[rand()%7];
     // printf("%f\n", instr_t);
     doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
-
+    // **** insert IP interrupt here (0xD4) *****
+    if(i == 6000) {
+      writeJWD1797(jwd1797, 0xB0, 0xD4);
+    }
     /* encounter index hole every ~200,000 microseconds - time for one
       full disk rotation at 300 RPM) */
     if(jwd1797->rotational_byte_pointer >= 6394 ||
@@ -189,6 +192,7 @@ void indexPulseTest(JWD1797* jwd1797, double instr_times[]) {
       printf("%s", "TYPE I STATUS REGISTER: ");
       print_bin8_representation(jwd1797->statusRegister);
       printf("%s\n", "");
+      printf("%d\n", i);
     }
 
     // sleep(1); // delay loop iteration for observation
@@ -436,10 +440,16 @@ void seekCommandTest(JWD1797* jwd1797, double instr_times[]) {
     // printf("%f\n", instr_t);
     doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
 
+    // insert IP interrupt command @ master timer = 30010
+    // if(i == 15500) {
+    //   writeJWD1797(jwd1797, 0xB0, 0xD4);
+    //   sleep(1); // delay loop iteration for observation
+    // }
     if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
       (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
       (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015) ||
       (jwd1797->master_timer >= 119990 && jwd1797->master_timer <= 120015)) {
+        printf("%d\n", i);
         sleep(1); // delay loop iteration for observation
         seekTestPrintHelper(jwd1797);
     }
@@ -536,7 +546,7 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
 
   // load data register with 3
   writeJWD1797(jwd1797, 0xB3, 0b00000011);
-  // isssue seek track 3 command
+  // issue seek track 3 command
   writeJWD1797(jwd1797, 0xB0, 0b00010011);
   for(int i = 0; i < 100000; i++) {
     // simulate random instruction time by picking from instruction_times list
@@ -571,9 +581,10 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
 
   // load the desired sector number into the SR
   writeJWD1797(jwd1797, 0xB2, 0b00000111);
-  // issue READ SECTOR command - SSO = 0, 15ms delay, single record
+  // issue READ SECTOR command - SSO = 1, 15ms delay, multiple record
   writeJWD1797(jwd1797, 0xB0, 0b10011110);
   for(int i = 0; i < 300000; i++) {
+    // printf("%d\n", i);
     // simulate random instruction time by picking from instruction_times list
     double instr_t = instr_times[rand()%7];
     // printf("%f\n", instr_t);
@@ -581,12 +592,57 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
     if(jwd1797->new_byte_read_signal_ && jwd1797->id_field_data[2] >= 7 &&
       ((jwd1797->statusRegister)&1)) {
       readSectorPrintHelper(jwd1797);
-      usleep(100000); // delay loop iteration for observation
+      usleep(50000); // delay loop iteration for observation
     }
-
     // is there a drq request? check status bit 1..
     if(((readJWD1797(jwd1797, 0xB0) >> 1) & 1) == 1) {
+      // printf("%s%f\n", "MASTER CLOCK: ", jwd1797->master_timer);
+      // read the data register to get the byte read from disk
+      unsigned char r_byte = (unsigned char)(readJWD1797(jwd1797, 0xB3));
+      memory[memory_index_ptr] = r_byte;
+      memory_index_ptr++;
+      // usleep(500000); // delay loop iteration for observation
+    }
 
+    // insert forced interrupt (0xD8) terminate command with INTRQ @ inst 150,000
+    if(i == 82700) {
+      writeJWD1797(jwd1797, 0xB0, 0xD8);
+    }
+  }
+  printf("%s", "Verify Index count: ");
+  printf("%d\n", jwd1797->verify_index_count);
+  printf("\n\n");
+  printByteArray(memory, 512*4);
+  printf("%s", "TYPE II STATUS: " );
+  print_bin8_representation(readJWD1797(jwd1797, 0xB0));
+  printf("\n\n");
+
+  usleep(3000000);
+
+  // initialize to all 0x00
+  for(int i = 0; i < 512*4; i++) {
+    memory[i] = 0x00;
+  }
+  // memory index pointer
+  memory_index_ptr = 0;
+
+  // load the desired sector number into the SR
+  writeJWD1797(jwd1797, 0xB2, 0b00000111);
+  // issue READ SECTOR command - SSO = 1, 15ms delay, multiple record
+  writeJWD1797(jwd1797, 0xB0, 0b10011110);
+  for(int i = 0; i < 300000; i++) {
+    // printf("%d\n", i);
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+    if(jwd1797->new_byte_read_signal_ && jwd1797->id_field_data[2] >= 7 &&
+      ((jwd1797->statusRegister)&1)) {
+      readSectorPrintHelper(jwd1797);
+      usleep(50000); // delay loop iteration for observation
+    }
+    // is there a drq request? check status bit 1..
+    if(((readJWD1797(jwd1797, 0xB0) >> 1) & 1) == 1) {
       // printf("%s%f\n", "MASTER CLOCK: ", jwd1797->master_timer);
       // read the data register to get the byte read from disk
       unsigned char r_byte = (unsigned char)(readJWD1797(jwd1797, 0xB3));
@@ -601,6 +657,53 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
   printByteArray(memory, 512*4);
   printf("%s", "TYPE II STATUS: " );
   print_bin8_representation(readJWD1797(jwd1797, 0xB0));
+  printf("\n\n");
+
+  usleep(3000000);
+
+  // write 0xD0 to clear immediate interrupt 0xD8
+  writeJWD1797(jwd1797, 0xB0, 0xD0);
+
+  // initialize to all 0x00
+  for(int i = 0; i < 512*4; i++) {
+    memory[i] = 0x00;
+  }
+  // memory index pointer
+  memory_index_ptr = 0;
+
+  // load the desired sector number into the SR
+  writeJWD1797(jwd1797, 0xB2, 0b00000111);
+  // issue READ SECTOR command - SSO = 1, 15ms delay, multiple record
+  writeJWD1797(jwd1797, 0xB0, 0b10011110);
+  for(int i = 0; i < 300000; i++) {
+    // printf("%d\n", i);
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+    if(jwd1797->new_byte_read_signal_ && jwd1797->id_field_data[2] >= 7 &&
+      ((jwd1797->statusRegister)&1)) {
+      readSectorPrintHelper(jwd1797);
+      usleep(50000); // delay loop iteration for observation
+    }
+    // is there a drq request? check status bit 1..
+    if(((readJWD1797(jwd1797, 0xB0) >> 1) & 1) == 1) {
+      // printf("%s%f\n", "MASTER CLOCK: ", jwd1797->master_timer);
+      // read the data register to get the byte read from disk
+      unsigned char r_byte = (unsigned char)(readJWD1797(jwd1797, 0xB3));
+      memory[memory_index_ptr] = r_byte;
+      memory_index_ptr++;
+      // usleep(500000); // delay loop iteration for observation
+    }
+  }
+  printf("%s", "Verify Index count: ");
+  printf("%d\n", jwd1797->verify_index_count);
+  printf("\n\n");
+  printByteArray(memory, 512*4);
+  printf("%s", "TYPE II STATUS: " );
+  print_bin8_representation(readJWD1797(jwd1797, 0xB0));
+  printf("\n\n");
+
 }
 
 void readAddressCommandTest(JWD1797* jwd1797) {
@@ -667,6 +770,7 @@ void seekTestPrintHelper(JWD1797* jwd1797) {
   printf("%d\n", jwd1797->current_track);
   printf("%s", "Direction: ");
   printf("%d\n", jwd1797->direction_pin);
+  printf("%s%lu\n", "Rotational byte ptr: ", jwd1797->rotational_byte_pointer);
   printf("%s", "TRACK REGISTER: ");
   print_bin8_representation(jwd1797->trackRegister);
   printf("%s\n", "");

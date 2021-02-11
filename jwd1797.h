@@ -85,7 +85,7 @@ int tg43_pin;
 int HLD_pin;
 int HLT_pin;
 int not_track00_pin;
-int direction_pin;
+int direction_pin;  // (0 = out->track00, 1 = in->track39)
 int sso_pin;
 // int not_test_pin;
 
