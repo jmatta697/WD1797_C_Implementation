@@ -852,18 +852,21 @@ void readAddressTest(JWD1797* jwd1797, double instr_times[]) {
     // printf("%f\n", instr_t);
     doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
     // is there a drq request? check status bit 1..
-    if(jwd1797->e_delay_done && jwd1797->new_byte_read_signal_ &&
-      jwd1797->rotational_byte_pointer > 1398 &&
-      jwd1797->rotational_byte_pointer <= 1439) {
-      readSectorPrintHelper(jwd1797);
-      usleep(500000); // delay loop iteration for observation
-      // read
-      if(((readJWD1797(jwd1797, 0xB0) >> 1) & 1) == 1) {
-        // readSectorPrintHelper(jwd1797);
-        // usleep(100000); // delay loop iteration for observation
-        readJWD1797(jwd1797, 0xB3);
-      }
-    }
+    // if(jwd1797->e_delay_done && jwd1797->new_byte_read_signal_ &&
+    //   jwd1797->rotational_byte_pointer > 1398 &&
+    //   jwd1797->rotational_byte_pointer <= 1439) {
+    //   readSectorPrintHelper(jwd1797);
+    //   usleep(500000); // delay loop iteration for observation
+    //   // read
+    //   if(((readJWD1797(jwd1797, 0xB0) >> 1) & 1) == 1) {
+    //     // readSectorPrintHelper(jwd1797);
+    //     // usleep(100000); // delay loop iteration for observation
+    //     readJWD1797(jwd1797, 0xB3);
+    //   }
+    // }
+    readSectorPrintHelper(jwd1797);
+    getchar();
+    // usleep(500000); // delay loop iteration for observation
   }
   usleep(2000000);
   for(int i = 0; i < 500000; i++) {

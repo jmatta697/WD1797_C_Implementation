@@ -3,6 +3,8 @@
 // email: jmatta1980@hotmail.com
 // November 2020
 
+// jwd1797.c
+
 // Notes:
 /* clock is assumed to be 1 MHz for single and double density mini-floppy disks
 	(5.25" ) */
@@ -10,33 +12,36 @@
 	512 bytes per sector */
 // A 300 RPM motor speed is also assumed
 // NO write protect functionality
-
-// jwd1797.c
-
+// the wd1797 has a 1MHz clock in the Z100 for 5.25" floppy
 
 #include <stdlib.h>
 #include <stdio.h>
 #include "jwd1797.h"
 #include "utility_functions.h"
 
-// ** ALL TIMINGS in microseconds **
+/* TIMINGS (microseconds) */
 // an index hole is encountered every 0.2 seconds with a 300 RPM drive
 // #define INDEX_HOLE_ENCOUNTER_US 200000
-// index hole pulses should last for 20 microseconds (WD1797 docs)
-#define INDEX_HOLE_PULSE_US 40.0
-// when non-busy status and HLD high, reset HLD after 15 index pulses
-#define HLD_IDLE_INDEX_COUNT_LIMIT 15
+// index hole pulses should last for a minimum of 20 microseconds (WD1797 docs)
+// (was set to 40 us)
+#define INDEX_HOLE_PULSE_US 100.0
 // head load timing (this can be set from 30-100 ms, depending on drive)
-#define HEAD_LOAD_TIMING_LIMIT 45.0*1000	// set to 45 ms (45,000 us)
+// set to 45 ms (45,000 us)
+#define HEAD_LOAD_TIMING_LIMIT 45.0*1000
 // verify time is 30 milliseconds for a 1MHz clock
 #define VERIFY_HEAD_SETTLING_LIMIT 30.0*1000
-// E (15 ms delay) for TYPE II and III commands (30 ms for 1 MHz clock)
+// E (15 ms delay) for TYPE II and III commands (30 ms (30*1000 us) for 1 MHz clock)
 #define E_DELAY_LIMIT 30.0*1000
 /* time limit for data shift register to assemble byte in data register
 	(simulated). This value is based on 'https://www.hp9845.net/9845/projects/fdio/#hp_formats'
 	where the 5.25" DS/DD disk is reported to have a 300 kbps data rate. */
 // #define ASSEMBLE_DATA_BYTE_LIMIT 26.67	// ~ 3.33375 us/bit
-#define ROTATIONAL_BYTE_READ_LIMIT 30.1	// ~ 3.9 us/bit
+// (was set to 30.1 us) - ** should be 31.27 us **
+#define ROTATIONAL_BYTE_READ_LIMIT 31200	// NANOSECONDS
+
+/* COUNTS */
+// when non-busy status and HLD high, reset HLD after 15 index pulses
+#define HLD_IDLE_INDEX_COUNT_LIMIT 15
 /* number of bytes after ID field search encounters four 0x00 bytes. This
  	should be 16 bytes according to WD-1797 docs. After 16 bytes the search
 	for the next ID field starts over. */
@@ -86,6 +91,10 @@
 #define GAP4B_LENGTH 598
 #define GAP4B_BYTE 0x4E
 
+/* INTRQ (pin connected to slave PIC IRQ3 in the Z100) is set to high at the
+  completion of every command and when a force interrupt condition is met. It is
+  reset (set to low) when the status register is read or when the commandRegister
+  is loaded with a new command */
 // extern e8259_t* e8259_slave;
 
 char* disk_content_array;
@@ -95,13 +104,6 @@ JWD1797* newJWD1797() {
 	return jwd_controller;
 }
 
-/* INTRQ (pin connected to slave PIC IRQ3 in the Z100) is set to high at the
-  completion of every command and when a force interrupt condition is met. It is
-  reset (set to low) when the status register is read or when the commandRegister
-  is loaded with a new command */
-
-// the wd1797 has a 1MHz clock in the Z100 for 5.25" floppy
-
 void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->dataShiftRegister = 0b00000000;
 	jwd_controller->dataRegister = 0b00000000;
@@ -110,6 +112,8 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->commandRegister = 0b00000000;
 	jwd_controller->statusRegister = 0b00000000;
 	jwd_controller->CRCRegister = 0b00000000;
+	jwd_controller->controlLatch = 0b00000000;
+	jwd_controller->controlStatus = 0b00000000;
 
 	jwd_controller->disk_img_index_pointer = 0;
 	jwd_controller->rotational_byte_pointer = 6000;	// start at a few bytes before 0 index
@@ -155,7 +159,8 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->verify_head_settling_timer = 0.0;
 	jwd_controller->e_delay_timer = 0.0;
 	jwd_controller->assemble_data_byte_timer = 0.0;
-	jwd_controller->rotational_byte_read_timer = 0.0;
+	jwd_controller->rotational_byte_read_timer = 0; // NANOSECONDS
+	jwd_controller->rotational_byte_read_timer_OVR = 0;
 	jwd_controller->HLD_idle_reset_timer = 0.0;
 	jwd_controller->HLT_timer = 0.0;
 
@@ -212,6 +217,9 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->IDAM_byte_count = 0;
 	jwd_controller->start_track_read_ = 0;
 
+	// control latch initializations
+	jwd_controller->wait_enabled = 0;
+
 	// disk_content_array = diskImageToCharArray("z-dos-1.img", jwd_controller);
 	// TEST disk image to array function
 	// printByteArray(disk_content_array, 368640);
@@ -265,9 +273,12 @@ unsigned int readJWD1797(JWD1797* jwd_controller, unsigned int port_addr) {
 		// control latch reg port (write)
 		case 0xb4:
 			printf(" ** WARNING: Reading from WD1797 control latch port 0xB4 (write only)!\n");
+			r_val = jwd_controller->controlLatch;
 			break;
 		// controller status port (read)
 		case 0xb5:
+			printf("reading from WD1797 control status port 0xB5\n");
+			r_val = jwd_controller->controlStatus;
 			break;
 		default:
 			printf("%X is an invalid port!\n", port_addr);
@@ -319,6 +330,13 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 			break;
 		// control latch port
 		case 0xb4:
+			printf("Writing to WD1797 control port 0xB4 (ONLY wait_enabled option)\n");
+			jwd_controller->controlLatch = value;
+			// set wait enabled option according to bit 6
+			jwd_controller->wait_enabled = (jwd_controller->controlLatch >> 6) & 1;
+			if(jwd_controller->wait_enabled) {
+				printf("%s\n", "** FD-1797 Wait Enabled **");
+			}
 			break;
 		// controller status port
 		case 0xb5:
@@ -335,6 +353,8 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 	instruction to the internal WD1797 timers */
 void doJWD1797Cycle(JWD1797* w, double us) {
 	w->master_timer += us;	// @@@ DEBUG clock @@@
+	// printf("%s%lu\n", "JWD1797 ROTATIONAL BYTE POINTER: ",
+	// 	w->rotational_byte_pointer);
 
 	/* update status register bit 7 (NOT READY) based on inverted not_master_reset
 		or'd with inverted ready_pin (ALL COMMANDS) */
@@ -394,10 +414,13 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 
 	// reset new byte signal every WD1797 clock cycle
 	w->new_byte_read_signal_ = 0;
-	// clock the rotational byte timer
-	w->rotational_byte_read_timer += us;
+	// clock the rotational byte timer using NANOSECONDS from mainBoard
+	w->rotational_byte_read_timer += ((int)(us*1000.0));
 	// is it time to advance to the next rotational byte?
 	if(w->rotational_byte_read_timer >= ROTATIONAL_BYTE_READ_LIMIT) {
+		// calculate overage for incoming time from mainBoard.c
+		w->rotational_byte_read_timer_OVR =
+			w->rotational_byte_read_timer - ROTATIONAL_BYTE_READ_LIMIT;
 		// advance to next rotational byte (go to 0 if back to start of track)
 		w->rotational_byte_pointer =
 			(w->rotational_byte_pointer + 1) % w->actual_num_track_bytes;
@@ -416,8 +439,8 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 		/* make new byte read signal (internal) go high. This signals that a new
 			rotational byte has been encountered */
 		w->new_byte_read_signal_ = 1;
-		// reset timer
-		w->rotational_byte_read_timer = 0.0;
+		// reset timer to include overage
+		w->rotational_byte_read_timer = w->rotational_byte_read_timer_OVR;
 	}
 
 	/* is it the start of a new track (rising edge of IP? = track_start_signal_)
@@ -476,6 +499,9 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 	}
 	// HLD pin will reset if drive is not busy and 15 index pulses happen
 	handleHLDIdle(w);
+
+	/* update control status */
+	updateControlStatus(w);
 }
 
 /* WD1797 accepts 11 different commands - this function will register the
@@ -713,6 +739,7 @@ void commandStep(JWD1797* w, double us) {
 				// generate interrupt
 				w->intrq = 1;
 				// e8259_set_irq0 (e8259_slave, 1);
+				printf("%s\n", "command type I complete");
 				return;
 			}
 
@@ -1037,7 +1064,7 @@ void setupTypeIICommand(JWD1797* w) {
 	// reset drq/lost data/record not found/bits 5, 6 in status register
 	w->statusRegister &= 0b10001001;
 	// reset INT request line
-	// w->intrq = 0;
+	w->intrq = 0;
 	// e8259_set_irq0 (e8259_slave, 0);
 
 	// sample READY input from DRIVE
@@ -1383,6 +1410,33 @@ void handleHLTTimer(JWD1797* w, double time) {
 	}
 }
 
+void updateControlStatus(JWD1797* w) {
+	// get busy status from status register
+	unsigned char busy_stat = (w->statusRegister & 0b00000001);
+	// set busy bit 0 based on status register bit 0
+	w->controlStatus = w->controlStatus | busy_stat;
+	// get ready status (always ready)
+	unsigned char ready_stat = (w->ready_pin << 7) & 0b10000000;
+	// set ready status bit 7
+	w->controlStatus = w->controlStatus | ready_stat;
+	// make write protect always off - bit 6
+	w->controlStatus = w->controlStatus & 0b10111111;
+	// get HLT_pin status for headload stat
+	unsigned char head_load_stat = (w->HLT_pin << 5) & 0b00100000;
+	// set ready status bit 5
+	w->controlStatus = w->controlStatus | head_load_stat;
+	// set SEEK and CRC error to always 0 (never error status) - bits 3 and 4
+	w->controlStatus = w->controlStatus & 0b11100111;
+	// get track zero status from not track zero pin
+	unsigned char track_zero_status = (~(w->not_track00_pin << 2)) & 0b00000100;
+	// set track zero status
+	w->controlStatus = w->controlStatus | track_zero_status;
+	// get index pulse pin status
+	unsigned char index_pulse = (w->index_pulse_pin << 1) & 0b00000010;
+	// set index pulse status
+	w->controlStatus = w->controlStatus | index_pulse;
+}
+
 // http://www.cplusplus.com/reference/cstdio/fread/
 char* diskImageToCharArray(char* fileName, JWD1797* w) {
 	FILE* disk_img;
@@ -1411,10 +1465,10 @@ char* diskImageToCharArray(char* fileName, JWD1797* w) {
 		("result" variable makes sure all expected bytes are copied) */
 	check_result = fread(diskFileArray, 1, w->disk_img_file_size, disk_img);
 	if(check_result != w->disk_img_file_size) {
-		printf("%s\n\n", "ERROR Converting disk image");
+		printf("%s\n", "ERROR Converting disk image");
 	}
 	else {
-		printf("%s\n\n", "disk image file converted to char array successfully!");
+		printf("\n%s\n", "disk image file converted to char array successfully!");
 	}
 	fclose(disk_img);
 	return diskFileArray;

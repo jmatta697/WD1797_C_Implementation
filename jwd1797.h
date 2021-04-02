@@ -22,6 +22,8 @@ unsigned char commandRegister; // do not load when device is busy - except force
 /* holds device status information relevant to the previously executed command */
 unsigned char statusRegister;
 unsigned char CRCRegister;
+unsigned char controlLatch;
+unsigned char controlStatus;
 
 // keep track of current byte being pointed to by the READ/WRITE head
 unsigned long disk_img_index_pointer;
@@ -74,7 +76,8 @@ double step_timer;
 double verify_head_settling_timer;
 double e_delay_timer;
 double assemble_data_byte_timer;
-double rotational_byte_read_timer;
+unsigned int rotational_byte_read_timer;
+unsigned int rotational_byte_read_timer_OVR;
 double HLD_idle_reset_timer;
 double HLT_timer;
 
@@ -150,6 +153,9 @@ int all_bytes_inputted; // indictes when an entire data field has been read
 int IDAM_byte_count;  // count for collecting the 6 IDAM bytes for READ ADDRESS
 int start_track_read_;
 
+// control latch
+int wait_enabled;
+
 } JWD1797;
 
 JWD1797* newJWD1797();
@@ -189,3 +195,4 @@ int getSectorLengthFromID(JWD1797*);
 int handleEDelay(JWD1797*, double);
 int dataAddressMarkSearch(JWD1797*);
 int verifyCRC(JWD1797*);
+void updateControlStatus(JWD1797*);
