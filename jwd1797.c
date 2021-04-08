@@ -17,13 +17,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "jwd1797.h"
+// #include "e8259.h"
 #include "utility_functions.h"
 
 /* TIMINGS (microseconds) */
-// an index hole is encountered every 0.2 seconds with a 300 RPM drive
-// #define INDEX_HOLE_ENCOUNTER_US 200000
 // index hole pulses should last for a minimum of 20 microseconds (WD1797 docs)
-// (was set to 40 us)
 #define INDEX_HOLE_PULSE_US 100.0
 // head load timing (this can be set from 30-100 ms, depending on drive)
 // set to 45 ms (45,000 us)
@@ -32,12 +30,6 @@
 #define VERIFY_HEAD_SETTLING_LIMIT 30.0*1000
 // E (15 ms delay) for TYPE II and III commands (30 ms (30*1000 us) for 1 MHz clock)
 #define E_DELAY_LIMIT 30.0*1000
-/* time limit for data shift register to assemble byte in data register
-	(simulated). This value is based on 'https://www.hp9845.net/9845/projects/fdio/#hp_formats'
-	where the 5.25" DS/DD disk is reported to have a 300 kbps data rate. */
-// #define ASSEMBLE_DATA_BYTE_LIMIT 26.67	// ~ 3.33375 us/bit
-// (was set to 30.1 us) - ** should be 31.27 us **
-#define ROTATIONAL_BYTE_READ_LIMIT 31200	// NANOSECONDS
 
 /* COUNTS */
 // when non-busy status and HLD high, reset HLD after 15 index pulses
@@ -91,7 +83,7 @@
 #define GAP4B_LENGTH 598
 #define GAP4B_BYTE 0x4E
 
-/* INTRQ (pin connected to slave PIC IRQ3 in the Z100) is set to high at the
+/* INTRQ (pin connected to slave PIC IRQ0 in the Z100) is set to high at the
   completion of every command and when a force interrupt condition is met. It is
   reset (set to low) when the status register is read or when the commandRegister
   is loaded with a new command */
@@ -116,7 +108,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->controlStatus = 0b00000000;
 
 	jwd_controller->disk_img_index_pointer = 0;
-	jwd_controller->rotational_byte_pointer = 6000;	// start at a few bytes before 0 index
+	jwd_controller->rotational_byte_pointer = 2500;	// start at a few bytes before 0 index
 	jwd_controller->rw_start_byte = 0;
 
 	// jwd_controller->ready = 0;	// start drive not ready
@@ -159,8 +151,9 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->verify_head_settling_timer = 0.0;
 	jwd_controller->e_delay_timer = 0.0;
 	jwd_controller->assemble_data_byte_timer = 0.0;
+	jwd_controller->rotational_byte_read_limit = 0; // NANOSECONDS
 	jwd_controller->rotational_byte_read_timer = 0; // NANOSECONDS
-	jwd_controller->rotational_byte_read_timer_OVR = 0;
+	jwd_controller->rotational_byte_read_timer_OVR = 0; // NANOSECONDS
 	jwd_controller->HLD_idle_reset_timer = 0.0;
 	jwd_controller->HLT_timer = 0.0;
 
@@ -240,8 +233,9 @@ unsigned int readJWD1797(JWD1797* jwd_controller, unsigned int port_addr) {
 		// status reg port
 		case 0xb0:
 			r_val = jwd_controller->statusRegister;
-			// reset INTRQ when status register is read
+			// clear interrupt
 			jwd_controller->intrq = 0;
+			// e8259_set_irq0 (e8259_slave, 0);
 			// clear all forced interrupt flags except INTERRUPT IMMEDIATE (0xD8)
 			jwd_controller->interruptNRtoR = 0;
 			jwd_controller->interruptRtoNR = 0;
@@ -295,8 +289,9 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 		// command reg port
 		case 0xb0:
 			jwd_controller->commandRegister = value;
-			// reset INTRQ when command register is written to
+			// reset INTRQ when command register is written to - clear interrupt
 			jwd_controller->intrq = 0;
+			// e8259_set_irq0 (e8259_slave, 0);
 			// clear all forced interrupt flags except INTERRUPT IMMEDIATE (0xD8)
 			jwd_controller->interruptNRtoR = 0;
 			jwd_controller->interruptRtoNR = 0;
@@ -417,10 +412,10 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 	// clock the rotational byte timer using NANOSECONDS from mainBoard
 	w->rotational_byte_read_timer += ((int)(us*1000.0));
 	// is it time to advance to the next rotational byte?
-	if(w->rotational_byte_read_timer >= ROTATIONAL_BYTE_READ_LIMIT) {
+	if(w->rotational_byte_read_timer >= w->rotational_byte_read_limit) {
 		// calculate overage for incoming time from mainBoard.c
 		w->rotational_byte_read_timer_OVR =
-			w->rotational_byte_read_timer - ROTATIONAL_BYTE_READ_LIMIT;
+			w->rotational_byte_read_timer - w->rotational_byte_read_limit;
 		// advance to next rotational byte (go to 0 if back to start of track)
 		w->rotational_byte_pointer =
 			(w->rotational_byte_pointer + 1) % w->actual_num_track_bytes;
@@ -1416,7 +1411,7 @@ void updateControlStatus(JWD1797* w) {
 	// set busy bit 0 based on status register bit 0
 	w->controlStatus = w->controlStatus | busy_stat;
 	// get ready status (always ready)
-	unsigned char ready_stat = (w->ready_pin << 7) & 0b10000000;
+	unsigned char ready_stat = (~(w->ready_pin << 7)) & 0b10000000;
 	// set ready status bit 7
 	w->controlStatus = w->controlStatus | ready_stat;
 	// make write protect always off - bit 6
@@ -1438,31 +1433,22 @@ void updateControlStatus(JWD1797* w) {
 }
 
 // http://www.cplusplus.com/reference/cstdio/fread/
-char* diskImageToCharArray(char* fileName, JWD1797* w) {
+unsigned char* diskImageToCharArray(char* fileName, JWD1797* w) {
 	FILE* disk_img;
-	long diskFileSize;
+	unsigned long diskFileSize;
 	size_t check_result;
-	char* diskFileArray;
+	unsigned char* diskFileArray;
   // open current file (disk in drive)
   disk_img = fopen(fileName, "rb");
-	/* set disk attributes based on disk image file (40 tracks/9 sectors per track/
-		512 bytes per sector for 360k z-dos disk)
-		/* **** THIS IS HARDCODED for A Z-DOS DISK.
-			THIS SHOULD BE DYNAMIC! ***
-			How do we extract these values form the disk data? *** */
-	w->cylinders = 40;	// 0-39
-	w->num_heads = 2;	// 0-1
-	w->sectors_per_track = 9;	// 1-9 (sectors start on 1)
-	w->sector_length = 512;	// bytes 0-511
-	/* */
-	// obtain disk size
+
+	// obtain disk image file size in bytes
 	fseek(disk_img, 0, SEEK_END);
 	w->disk_img_file_size = ftell(disk_img);
 	rewind(disk_img);
 	// allocate memory to handle array for entire disk image
-	diskFileArray = (char*) malloc(sizeof(char) * w->disk_img_file_size);
+	diskFileArray = (unsigned char*) malloc(sizeof(char) * w->disk_img_file_size);
 	/* copy disk image file into array buffer
-		("result" variable makes sure all expected bytes are copied) */
+		("check_result" variable makes sure all expected bytes are copied) */
 	check_result = fread(diskFileArray, 1, w->disk_img_file_size, disk_img);
 	if(check_result != w->disk_img_file_size) {
 		printf("%s\n", "ERROR Converting disk image");
@@ -1471,16 +1457,34 @@ char* diskImageToCharArray(char* fileName, JWD1797* w) {
 		printf("\n%s\n", "disk image file converted to char array successfully!");
 	}
 	fclose(disk_img);
+
 	return diskFileArray;
 }
 
 /* establishes a char array (w->formattedDiskArray) that contains the (IBM)
 	format bytes and the disk .img data bytes. The returned array will approximate
-	the actual bytes on a 5.25" DS/DD (double side/double density) 360KB floppy
-	disk */
+	the actual bytes on a 5.25" DS/DD (double side/double density) floppy disk */
 void assembleFormattedDiskArray(JWD1797* w, char* fileName) {
 	// first, get the payload byte data from the disk image file as an array
-	char* sectorPayloadDataBytes = diskImageToCharArray(fileName, w);
+	unsigned char* sectorPayloadDataBytes = diskImageToCharArray(fileName, w);
+	/* set disk attributes based on disk image file (For exmaple,
+		40 tracks/9 sectors per track/512 bytes per sector for 360k z-dos disk)
+		These are dynamically set according to the loader disk paramenter table.
+		(page 10.18 - Z100 Technical Manual – Hardware) */
+
+	w->num_heads = (sectorPayloadDataBytes[0x15]&1) + 1;	// 0-1
+	printf("%s%d\n", "number of sides (heads): ", w->num_heads);
+	int temp_sectors_per_track = sectorPayloadDataBytes[0xF];	// 1-9 (sectors start on 1)
+	w->sectors_per_track = 8;	// 1-9 (sectors start on 1)
+	printf("%s%d\n", "sectors per track: ", temp_sectors_per_track);
+	w->sector_length = sectorPayloadDataBytes[0x4] | (sectorPayloadDataBytes[0x5]<<8);
+	printf("%s%d\n", "sector length (bytes): ", w->sector_length);
+	int total_sectors = sectorPayloadDataBytes[0xC] | (sectorPayloadDataBytes[0xD]<<8);
+	printf("%s%d\n", "total number of sectors on disk: ", total_sectors);
+	w->cylinders = total_sectors/temp_sectors_per_track/w->num_heads;	// 0-39
+	printf("%s%d\n", "cylinders (tracks per side): ", w->cylinders);
+
+	/* */
 	/* determine the total number of bytes the raw disk byte array will be */
 	// first get the length of the total data payload bytes extracted from the disk image
 	long num_payload_bytes = w->disk_img_file_size;
@@ -1488,13 +1492,19 @@ void assembleFormattedDiskArray(JWD1797* w, char* fileName) {
 		This will be used for rotational byte pointing while the disk is spinning */
 	w->actual_num_track_bytes = GAP4A_LENGTH + SYNC_LENGTH
 		+ INDEX_AM_PREFIX_LENGTH + INDEX_AM_LENGTH + GAP1_LENGTH
-		+ (9 * (SYNC_LENGTH + ID_AM_PREFIX_LENGTH
+		+ (w->sectors_per_track * (SYNC_LENGTH + ID_AM_PREFIX_LENGTH
 		+ ID_AM_LENGTH + CYLINDER_LENGTH + HEAD_LENGTH + SECTOR_LENGTH
 		+ SECTOR_SIZE_LENGTH + CRC_LENGTH + GAP2_LENGTH + SYNC_LENGTH
 		+ DATA_AM_PREFIX_LENGTH + DATA_AM_LENGTH + w->sector_length
 		+ CRC_LENGTH + GAP3_LENGTH)) + GAP4B_LENGTH;
-
 	printf("%s%d\n", "Formatted bytes per track: ", w->actual_num_track_bytes);
+
+	/* calculate byte rotation time in ns (for a 300 rpm disk, one rotation takes
+		200,000,000 nanoseconds) */
+	unsigned long raw_rotational_byte_read_limit = 200000000/w->actual_num_track_bytes;
+	w->rotational_byte_read_limit = raw_rotational_byte_read_limit -
+		(raw_rotational_byte_read_limit%200);
+	printf("%s%d\n", "rotational byte read limit (ns): ", w->rotational_byte_read_limit);
 
 	// now, get the total amount of bytes for the entire formatted disk
 	long formatted_disk_size = (w->cylinders * 2) * w->actual_num_track_bytes;
