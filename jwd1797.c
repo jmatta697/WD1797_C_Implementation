@@ -25,7 +25,7 @@
 #define INDEX_HOLE_PULSE_US 100.0
 // head load timing (this can be set from 30-100 ms, depending on drive)
 // set to 45 ms (45,000 us)
-#define HEAD_LOAD_TIMING_LIMIT 45.0*1000
+#define HEAD_LOAD_TIMING_LIMIT 55.0*1000
 // verify time is 30 milliseconds for a 1MHz clock
 #define VERIFY_HEAD_SETTLING_LIMIT 30.0*1000
 // E (15 ms delay) for TYPE II and III commands (30 ms (30*1000 us) for 1 MHz clock)
@@ -219,7 +219,7 @@ void resetJWD1797(JWD1797* jwd_controller) {
 
 	/* make a formatted disk array from the disk data payload image file.
 	 	will be held in jwd_controller->formattedDiskArray */
-	assembleFormattedDiskArray(jwd_controller, "z-dos-1.img");
+	assembleFormattedDiskArray(jwd_controller, "Z_DOS_ver1.bin");
 }
 
 // read data from wd1797 according to port
@@ -271,7 +271,7 @@ unsigned int readJWD1797(JWD1797* jwd_controller, unsigned int port_addr) {
 			break;
 		// controller status port (read)
 		case 0xb5:
-			printf("reading from WD1797 control status port 0xB5\n");
+			// printf("reading from WD1797 control status port 0xB5\n");
 			r_val = jwd_controller->controlStatus;
 			break;
 		default:
@@ -342,14 +342,10 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 	}
 }
 
-/* clocks the WD1797 chip (Z-100 uses a 1 MHz clock)
-	a cycle should happen every 0.000001 seconds - every 1 microsecond
-  main program will add the amount of calculated time from the previous
+/* main program will add the amount of calculated time from the previous
 	instruction to the internal WD1797 timers */
 void doJWD1797Cycle(JWD1797* w, double us) {
 	w->master_timer += us;	// @@@ DEBUG clock @@@
-	// printf("%s%lu\n", "JWD1797 ROTATIONAL BYTE POINTER: ",
-	// 	w->rotational_byte_pointer);
 
 	/* update status register bit 7 (NOT READY) based on inverted not_master_reset
 		or'd with inverted ready_pin (ALL COMMANDS) */
@@ -373,7 +369,7 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 			// reset BUSY status bit ONLY - other status bits are unchanged
 			w->statusRegister &= 0b11111110;
 		}
-		else {	// NO command running
+		else {									// NO command running
 			/* reset busy status and clear SEEK ERROR and CRC ERROR bits
 				(reflect TYPE I status) */
 			w->statusRegister &= 0b11100110; // reset NOT READY bit
@@ -419,7 +415,6 @@ void doJWD1797Cycle(JWD1797* w, double us) {
 		// advance to next rotational byte (go to 0 if back to start of track)
 		w->rotational_byte_pointer =
 			(w->rotational_byte_pointer + 1) % w->actual_num_track_bytes;
-		// printf("%lu\n", w->rotational_byte_pointer);
 		// when the first byte of the track is read, signal the start of the index pulse
 		if(w->rotational_byte_pointer == 0) {
 			w->track_start_signal_ = 1;
@@ -1406,30 +1401,8 @@ void handleHLTTimer(JWD1797* w, double time) {
 }
 
 void updateControlStatus(JWD1797* w) {
-	// get busy status from status register
-	unsigned char busy_stat = (w->statusRegister & 0b00000001);
-	// set busy bit 0 based on status register bit 0
-	w->controlStatus = w->controlStatus | busy_stat;
-	// get ready status (always ready)
-	unsigned char ready_stat = (~(w->ready_pin << 7)) & 0b10000000;
-	// set ready status bit 7
-	w->controlStatus = w->controlStatus | ready_stat;
-	// make write protect always off - bit 6
-	w->controlStatus = w->controlStatus & 0b10111111;
-	// get HLT_pin status for headload stat
-	unsigned char head_load_stat = (w->HLT_pin << 5) & 0b00100000;
-	// set ready status bit 5
-	w->controlStatus = w->controlStatus | head_load_stat;
-	// set SEEK and CRC error to always 0 (never error status) - bits 3 and 4
-	w->controlStatus = w->controlStatus & 0b11100111;
-	// get track zero status from not track zero pin
-	unsigned char track_zero_status = (~(w->not_track00_pin << 2)) & 0b00000100;
-	// set track zero status
-	w->controlStatus = w->controlStatus | track_zero_status;
-	// get index pulse pin status
-	unsigned char index_pulse = (w->index_pulse_pin << 1) & 0b00000010;
-	// set index pulse status
-	w->controlStatus = w->controlStatus | index_pulse;
+	// set INTRQ bit 0 and DRQ bit 7
+	w->controlStatus = (w->intrq & 1) | ((0x01 & 1) << 1) | ((w->drq & 1) << 7);
 }
 
 // http://www.cplusplus.com/reference/cstdio/fread/
@@ -1471,23 +1444,17 @@ void assembleFormattedDiskArray(JWD1797* w, char* fileName) {
 		40 tracks/9 sectors per track/512 bytes per sector for 360k z-dos disk)
 		These are dynamically set according to the loader disk paramenter table.
 		(page 10.18 - Z100 Technical Manual – Hardware) */
-
 	w->num_heads = (sectorPayloadDataBytes[0x15]&1) + 1;	// 0-1
 	printf("%s%d\n", "number of sides (heads): ", w->num_heads);
-	int temp_sectors_per_track = sectorPayloadDataBytes[0xF];	// 1-9 (sectors start on 1)
-	w->sectors_per_track = 8;	// 1-9 (sectors start on 1)
-	printf("%s%d\n", "sectors per track: ", temp_sectors_per_track);
+	w->sectors_per_track = sectorPayloadDataBytes[0xF];	// 1-9 (sectors start on 1)
+	printf("%s%d\n", "sectors per track: ", w->sectors_per_track);
 	w->sector_length = sectorPayloadDataBytes[0x4] | (sectorPayloadDataBytes[0x5]<<8);
 	printf("%s%d\n", "sector length (bytes): ", w->sector_length);
 	int total_sectors = sectorPayloadDataBytes[0xC] | (sectorPayloadDataBytes[0xD]<<8);
 	printf("%s%d\n", "total number of sectors on disk: ", total_sectors);
-	w->cylinders = total_sectors/temp_sectors_per_track/w->num_heads;	// 0-39
+	w->cylinders = total_sectors/w->sectors_per_track/w->num_heads;	// 0-39
 	printf("%s%d\n", "cylinders (tracks per side): ", w->cylinders);
 
-	/* */
-	/* determine the total number of bytes the raw disk byte array will be */
-	// first get the length of the total data payload bytes extracted from the disk image
-	long num_payload_bytes = w->disk_img_file_size;
 	/* determine how many actual bytes (including format bytes) each track is
 		This will be used for rotational byte pointing while the disk is spinning */
 	w->actual_num_track_bytes = GAP4A_LENGTH + SYNC_LENGTH
@@ -1501,28 +1468,31 @@ void assembleFormattedDiskArray(JWD1797* w, char* fileName) {
 
 	/* calculate byte rotation time in ns (for a 300 rpm disk, one rotation takes
 		200,000,000 nanoseconds) */
-	unsigned long raw_rotational_byte_read_limit = 200000000/w->actual_num_track_bytes;
+	unsigned long raw_rotational_byte_read_limit =
+		(unsigned long)(200000000/w->actual_num_track_bytes);
+	/* the raw rotational byte read limit is moded by 200 because the smallest
+		incoming time slice from the main Z-100 processor loop is 0.2 microseconds.
+		This is because one cycle of the 5Mhz clock speed takes 0.2 microseconds. */
 	w->rotational_byte_read_limit = raw_rotational_byte_read_limit -
 		(raw_rotational_byte_read_limit%200);
 	printf("%s%d\n", "rotational byte read limit (ns): ", w->rotational_byte_read_limit);
 
 	// now, get the total amount of bytes for the entire formatted disk
-	long formatted_disk_size = (w->cylinders * 2) * w->actual_num_track_bytes;
+	unsigned long formatted_disk_size = (w->cylinders * w->num_heads) * w->actual_num_track_bytes;
 
-	// printf("%lu\n", formatted_disk_size);
-	// printf("%lu\n", formatted_disk_size/80);
-
-	char fDiskArray[formatted_disk_size];
+	unsigned char fDiskArray[formatted_disk_size];
 	w->formattedDiskArray = fDiskArray;
-	long formattedDiskIndexPointer = 0;
-	long sectorPayloadArrayIndexPointer = 0;
-	// start making disk
 
-	// for each side (head)
-	for(int h = 0; h < w->num_heads; h++) {
+	unsigned long formattedDiskIndexPointer = 0;
+	unsigned long sectorPayloadArrayIndexPointer = 0;
 
-		// for each track
-		for(int t = 0; t < w->cylinders; t++) {
+	/* ** start making formatted disk array ** */
+
+	// for each cylinder
+	for(int cyl = 0; cyl < w->cylinders; cyl++) {
+
+		// for each head
+		for(int h = 0; h < w->num_heads; h++) {
 
 			// write GAP4A
 			for(int ct = 0; ct < GAP4A_LENGTH; ct++) {
@@ -1570,7 +1540,7 @@ void assembleFormattedDiskArray(JWD1797* w, char* fileName) {
 				w->formattedDiskArray[formattedDiskIndexPointer] = ID_AM_BYTE;
 				formattedDiskIndexPointer++;
 				// write cylinder byte (track)
-				w->formattedDiskArray[formattedDiskIndexPointer] = t;
+				w->formattedDiskArray[formattedDiskIndexPointer] = cyl;
 				formattedDiskIndexPointer++;
 				// write head byte (side)
 				w->formattedDiskArray[formattedDiskIndexPointer] = h;
@@ -1624,7 +1594,7 @@ void assembleFormattedDiskArray(JWD1797* w, char* fileName) {
 				// write DATA AM byte
 				w->formattedDiskArray[formattedDiskIndexPointer] = DATA_AM_BYTE;
 				formattedDiskIndexPointer++;
-				// write appropriate data payload
+				// write the data payload
 				for(int ct = 0; ct < w->sector_length; ct++) {
 					w->formattedDiskArray[formattedDiskIndexPointer] =
 						sectorPayloadDataBytes[sectorPayloadArrayIndexPointer];
@@ -1652,9 +1622,10 @@ void assembleFormattedDiskArray(JWD1797* w, char* fileName) {
 				formattedDiskIndexPointer++;
 			}
 
-		} // END TRACK LOOP
+		}	// END HEAD LOOP
 
-	} // END SIDE LOOP
+	} // END CYLINDER LOOP
+
 	/* * * DEBUG * * */
  	// printByteArray(w->formattedDiskArray, 1500);
 }
@@ -1663,11 +1634,13 @@ void assembleFormattedDiskArray(JWD1797* w, char* fileName) {
 	based on the rotational byte position, actual track (w->current_track),
 	and side select/head (w->sso_pin) */
 unsigned char getFDiskByte(JWD1797* w) {
-	// determine byte pointer on side 1 (head = 0)
-	long r_byte_pt = w->rotational_byte_pointer +
-		(w->current_track * w->actual_num_track_bytes);
-	// which head (side)?
-	r_byte_pt = r_byte_pt + (w->sso_pin * (w->actual_num_track_bytes * w->cylinders));
+	// advance 2 tracks worth of formatted bytes for each cylinder (track)
+	long r_byte_pt = w->current_track * (w->actual_num_track_bytes * 2);
+	// what head (side)? Head == 1? Add 1 formatted track's worth of bytes
+	r_byte_pt += w->actual_num_track_bytes * w->sso_pin;
+	// now add where the head is located in the rotation
+	r_byte_pt += w->rotational_byte_pointer;
+
 	return w->formattedDiskArray[r_byte_pt];
 }
 
