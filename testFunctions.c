@@ -18,9 +18,11 @@ void readTrackTestPrintHelper(JWD1797*);
   times are being registered by the JWD1797's master DEBUG clock */
 void masterClockTest(JWD1797* jwd1797, double instr_times[]) {
   printf("\n\n%s\n\n", "-------------- MASTER CLOCK TEST --------------");
+  printf("\n\n%s\n\n", "press <ENTER> key to continue...");
+  while(getchar() != '\n') {};
   resetJWD1797(jwd1797);
   for(int i = 0; i < 10; i++) {
-    sleep(1);
+    usleep(250000);
     // simulate random instruction time by picking from instruction_times list
     // pass instruction time elapsed to WD1797
     double instr_t = instr_times[rand()%7];
@@ -30,124 +32,171 @@ void masterClockTest(JWD1797* jwd1797, double instr_times[]) {
   }
 }
 
+void getFByteTest(JWD1797* jwd1797, double instr_times[]) {
+  printf("\n\n%s\n\n", "-------------- getFDiskByte() TEST (320k disk)--------------");
+  printf("\n\n%s\n\n", "press <ENTER> key to continue...");
+  while(getchar() != '\n') {};
+
+  unsigned char read_byte;
+  unsigned char compare_byte;
+  // adjust these for testing different conditions
+  jwd1797->current_track = 4;
+  jwd1797->sso_pin = 1;
+
+  for(int i = 0; i < 200; i++) {
+    // simulate random instruction time by picking from instruction_times list
+    double instr_t = instr_times[rand()%7];
+    // printf("%f\n", instr_t);
+    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+    // only print when a new byte is read
+    if(jwd1797->new_byte_read_signal_) {
+      printf("%s", "Rotational byte pointer: ");
+      printf("%lu\n", jwd1797->rotational_byte_pointer);
+      printf("%s", "MASTER CLOCK: ");
+      printf("%f -- ", jwd1797->master_timer);
+      read_byte = getFDiskByte(jwd1797);
+      printf("%02X\n", read_byte);
+      compare_byte = jwd1797->formattedDiskArray[(jwd1797->current_track*(5768*2))
+        + (jwd1797->sso_pin*5768) + jwd1797->rotational_byte_pointer];
+      if(read_byte == compare_byte) {
+        printf("%s\n", "\tBYTE CONFIRMED");
+      }
+      else {
+        printf("%s\n", "\tWRONG BYTE READ");
+      }
+      usleep(50000);
+    }
+  }
+}
+
 /* tests that incoming commands affect the correct flags and are received as
   expected */
 void commandWriteTests(JWD1797* jwd1797) {
   printf("\n\n%s\n", "-------------- COMMAND INTAKE TEST --------------");
+  printf("\n\n%s\n\n", "press <ENTER> key to continue...");
+  while(getchar() != '\n') {};
   /* command write tests... */
   int port = 0xb0;
   // Restore - rate-6, verify, load head
   resetJWD1797(jwd1797);
   writeJWD1797(jwd1797, port, 0b00001100);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // Restore - rate-20, no verify, load head
   resetJWD1797(jwd1797);
   writeJWD1797(jwd1797, port, 0b00001010);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // Seek - rate-20, no verify, load head
   resetJWD1797(jwd1797);
   writeJWD1797(jwd1797, port, 0b00011010);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // Seek - rate-12, verify, unload head
   resetJWD1797(jwd1797);
   writeJWD1797(jwd1797, port, 0b00010101);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // Step - rate-20, no verify, load head, update track reg
   resetJWD1797(jwd1797);
   writeJWD1797(jwd1797, port, 0b00111010);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // Step - rate-30, verify, unload head, no track reg update
   resetJWD1797(jwd1797);
   writeJWD1797(jwd1797, port, 0b00100111);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // StepIn - rate-30, no verify, load head, update track reg
   resetJWD1797(jwd1797);
   writeJWD1797(jwd1797, port, 0b01011011);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // StepOut - rate-12, verify, unload head, no track reg update
   resetJWD1797(jwd1797);
   writeJWD1797(jwd1797, port, 0b01100101);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // ReadSector - update SSO, no 15ms delay, 0 sector length, single record
   resetJWD1797(jwd1797);
   jwd1797->ready_pin = 1; // set drive to ready for TYPE II and III commands
   writeJWD1797(jwd1797, port, 0b10000010);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // ReadSector - no update SSO, 15ms delay, 1 sector length, multiple record
   resetJWD1797(jwd1797);
   jwd1797->ready_pin = 1;
   writeJWD1797(jwd1797, port, 0b10011100);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // WriteSector - DAM, no update SSO, 15ms delay, 1 sector length, multiple record
   resetJWD1797(jwd1797);
   jwd1797->ready_pin = 1;
   writeJWD1797(jwd1797, port, 0b10111100);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // WriteSector - deleted DAM, update SSO, no 15ms delay, 1 sector length, single record
   resetJWD1797(jwd1797);
   jwd1797->ready_pin = 1;
   writeJWD1797(jwd1797, port, 0b10101011);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // ReadAddress - update SSO, no 15ms delay
   resetJWD1797(jwd1797);
   jwd1797->ready_pin = 1;
   writeJWD1797(jwd1797, port, 0b11000010);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // ReadTrack - no update SSO, 15ms delay
   resetJWD1797(jwd1797);
   jwd1797->ready_pin = 1;
   writeJWD1797(jwd1797, port, 0b11100100);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // WriteTrack - update SSO, 15ms delay
   resetJWD1797(jwd1797);
   jwd1797->ready_pin = 1;
   writeJWD1797(jwd1797, port, 0b11110110);
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
+
+
   // ForceInterrupt - no INTRQ/terminate current command
   resetJWD1797(jwd1797);
   writeJWD1797(jwd1797, port, 0b11010000);
+  jwd1797->currentCommandType = 4;
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // ForceInterrupt - INTRQ on NR to R
   resetJWD1797(jwd1797);
   writeJWD1797(jwd1797, port, 0b11010001);
+  jwd1797->currentCommandType = 4;
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // ForceInterrupt - INTRQ on R to NR
   resetJWD1797(jwd1797);
   writeJWD1797(jwd1797, port, 0b11010010);
+  jwd1797->currentCommandType = 4;
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // ForceInterrupt - INTRQ on INDEX PULSE
   resetJWD1797(jwd1797);
   writeJWD1797(jwd1797, port, 0b11010100);
+  jwd1797->currentCommandType = 4;
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // ForceInterrupt - immediate INTRQ/terminate current command
   resetJWD1797(jwd1797);
   writeJWD1797(jwd1797, port, 0b11011000);
+  jwd1797->currentCommandType = 4;
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
   // ForceInterrupt - INTRQ on NR to R/INTRQ on INDEX PULSE
   resetJWD1797(jwd1797);
   writeJWD1797(jwd1797, port, 0b11010101);
+  jwd1797->currentCommandType = 4;
   printCommandFlags(jwd1797);
-  sleep(1);
+  usleep(250000);
 }
 
 /* this test confirms that the index hole is being registered by the status
@@ -158,6 +207,8 @@ void commandWriteTests(JWD1797* jwd1797) {
 void indexPulseTest(JWD1797* jwd1797, double instr_times[]) {
   // index hole test
   printf("\n\n%s\n", "-------------- INDEX PULSE TEST --------------");
+  printf("\n\n%s\n\n", "press <ENTER> key to continue...");
+  while(getchar() != '\n') {};
   resetJWD1797(jwd1797);
   // set track to 5 to have RESTORE command do some work
   jwd1797->current_track = 5;
@@ -165,7 +216,7 @@ void indexPulseTest(JWD1797* jwd1797, double instr_times[]) {
     pulses will only be valid in the statusRegister for TYPE I commands */
   writeJWD1797(jwd1797, 0xB0, 0b00000011);
 
-  for(int i = 0; i < 1500000; i++) {
+  for(int i = 0; i < 150000; i++) {
     // simulate random instruction time by picking from instruction_times list
     double instr_t = instr_times[rand()%7];
     // printf("%f\n", instr_t);
@@ -176,9 +227,9 @@ void indexPulseTest(JWD1797* jwd1797, double instr_times[]) {
     }
     /* encounter index hole every ~200,000 microseconds - time for one
       full disk rotation at 300 RPM) */
-    if(jwd1797->rotational_byte_pointer >= 6394 ||
+    if(jwd1797->rotational_byte_pointer >= jwd1797->actual_num_track_bytes-2 ||
       jwd1797->rotational_byte_pointer <= 2) {
-      usleep(500000); // delay loop iteration for observation
+      usleep(250000); // delay loop iteration for observation
       printf(" -- \n%s", "Rot. Byte Ptr: ");
       printf("%lu\n", jwd1797->rotational_byte_pointer);
       printf("%s", "MASTER CLOCK: ");
@@ -206,6 +257,8 @@ void indexPulseTest(JWD1797* jwd1797, double instr_times[]) {
 
 void restoreCommandTest(JWD1797* jwd1797, double instr_times[]) {
   printf("\n\n%s\n", "-------------- RESTORE COMMAND TEST --------------");
+  printf("\n\n%s\n\n", "press <ENTER> key to continue...");
+  while(getchar() != '\n') {};
 
   // resetJWD1797(jwd1797);
   // // set track to 3 to have RESTORE command do some work
@@ -259,7 +312,9 @@ void restoreCommandTest(JWD1797* jwd1797, double instr_times[]) {
   jwd1797->trackRegister = 3;
   // issue RESTORE command - no headlaod, verify (30 ms), 30 ms step rate
   writeJWD1797(jwd1797, 0xB0, 0b00000111);
-  printf("%s\n\n", "------- RESTORE from track 3: h=0, V=1 -------");
+  printf("\n%s\n\n", "------- RESTORE from track 3: h=0, V=1 -------");
+  printf("\n\n%s\n\n", "press <ENTER> key to continue...");
+  while(getchar() != '\n') {};
 
   for(int i = 0; i < 500000; i++) {
     // printf("%s\n", "loop");
@@ -273,39 +328,46 @@ void restoreCommandTest(JWD1797* jwd1797, double instr_times[]) {
       (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015) ||
       (jwd1797->master_timer >= 119990 && jwd1797->master_timer <= 120015) ||
       (jwd1797->master_timer >= 135000 && jwd1797->master_timer <= 150015)) {
-        usleep(500000); // delay loop iteration for observation
+        usleep(250000); // delay loop iteration for observation
         restoreTestPrintHelper(jwd1797);
     }
+    if(jwd1797->master_timer >= 135014.200000) {
+      break;
+    }
   }
+
+  // resetJWD1797(jwd1797);
+  // // set track to 3 to have RESTORE command do some work
+  // jwd1797->current_track = 3;
+  // jwd1797->trackRegister = 3;
+  // // issue RESTORE command - headlaod (60 ms), verify (30 ms), 30 ms step rate
+  // writeJWD1797(jwd1797, 0xB0, 0b00001111);
+  // printf("\n%s\n\n", "------- RESTORE from track 3: h=1, V=1 -------");
+  // printf("\n\n%s\n\n", "press <ENTER> key to continue...");
+  // while(getchar() != '\n') {};
+  //
+  // for(int i = 0; i < 500000; i++) {
+  //   // printf("%s\n", "loop");
+  //   // simulate random instruction time by picking from instruction_times list
+  //   double instr_t = instr_times[rand()%7];
+  //   // printf("%f\n", instr_t);
+  //   doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
+  //
+  //   if(jwd1797->master_timer >= 123000) {
+  //       usleep(25000); // delay loop iteration for observation
+  //       restoreTestPrintHelper(jwd1797);
+  //   }
+  // }
 
   resetJWD1797(jwd1797);
   // set track to 3 to have RESTORE command do some work
   jwd1797->current_track = 3;
   jwd1797->trackRegister = 3;
-  // issue RESTORE command - headlaod (60 ms), verify (30 ms), 30 ms step rate
-  writeJWD1797(jwd1797, 0xB0, 0b00001111);
-  printf("%s\n\n", "------- RESTORE from track 3: h=1, V=1 -------");
-
-  for(int i = 0; i < 500000; i++) {
-    // printf("%s\n", "loop");
-    // simulate random instruction time by picking from instruction_times list
-    double instr_t = instr_times[rand()%7];
-    // printf("%f\n", instr_t);
-    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
-
-    if(jwd1797->master_timer >= 123000) {
-        usleep(100000); // delay loop iteration for observation
-        restoreTestPrintHelper(jwd1797);
-    }
-  }
-
-  resetJWD1797(jwd1797);
-  // set track to 3 to have RESTORE command do some work
-  //jwd1797->current_track = 3;
-  //jwd1797->trackRegister = 3;
   // issue RESTORE command - headlaod (60 ms), no verify (30 ms), 30 ms step rate
   writeJWD1797(jwd1797, 0xB0, 0b00001111);
-  printf("%s\n\n", "------- RESTORE from track 0: h=1, V=1 -------");
+  printf("\n%s\n\n", "------- RESTORE from track 3: h=1, V=1 -------");
+  printf("\n\n%s\n\n", "press <ENTER> key to continue...");
+  while(getchar() != '\n') {};
 
   for(int i = 0; i < 500000; i++) {
     // printf("%s\n", "loop");
@@ -318,7 +380,7 @@ void restoreCommandTest(JWD1797* jwd1797, double instr_times[]) {
       (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
       (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015) ||
       (jwd1797->master_timer >= 119990 && jwd1797->master_timer <= 120015)) {
-        sleep(1); // delay loop iteration for observation
+        usleep(250000); // delay loop iteration for observation
         restoreTestPrintHelper(jwd1797);
     }
   }
@@ -353,6 +415,8 @@ void seekCommandTest(JWD1797* jwd1797, double instr_times[]) {
   /* SEEK command assumes the target track is in the data register. Also, the
     track register is updated automatically */
   printf("\n\n%s\n", "-------------- SEEK COMMAND TEST --------------");
+  printf("\n\n%s\n\n", "press <ENTER> key to continue...");
+  while(getchar() != '\n') {};
 
   // printf("%s\n\n", "------- SEEK from track 5 -> 2: h=0, V=0 -------");
   // // try to seek track 2 from current track 5
@@ -424,7 +488,9 @@ void seekCommandTest(JWD1797* jwd1797, double instr_times[]) {
   //   }
   // }
 
-  printf("%s\n\n", "------- SEEK from track 7 -> 5: h=1, V=1 -------");
+  printf("\n%s\n\n", "------- SEEK from track 7 -> 5: h=1, V=1 -------");
+  printf("\n\n%s\n\n", "press <ENTER> key to continue...");
+  while(getchar() != '\n') {};
   // try to seek track 0 from current track 3
   resetJWD1797(jwd1797);
   jwd1797->current_track = 7;
@@ -450,9 +516,10 @@ void seekCommandTest(JWD1797* jwd1797, double instr_times[]) {
       (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015) ||
       (jwd1797->master_timer >= 119990 && jwd1797->master_timer <= 120015)) {
         printf("%d\n", i);
-        sleep(1); // delay loop iteration for observation
+        usleep(250000); // delay loop iteration for observation
         seekTestPrintHelper(jwd1797);
     }
+    if(jwd1797->master_timer > 119992.400000) {break;}
   }
 }
 
@@ -462,6 +529,11 @@ void stepCommandTest(JWD1797* jwd1797, double instr_times[]) {
   jwd1797->direction_pin = 1;
   writeJWD1797(jwd1797, 0xB0, 0b00110111);
   printf("\n\n%s\n", "-------------- STEP COMMAND TEST --------------");
+  printf("\n\n%s\n\n", "press <ENTER> key to continue...");
+  while(getchar() != '\n') {};
+  printf("\n%s\n\n", "------- STEP from track 6 -> 7: h=1, V=1 -------");
+  printf("\n\n%s\n\n", "press <ENTER> key to continue...");
+  while(getchar() != '\n') {};
   for(int i = 0; i < 500000; i++) {
     // printf("%s\n", "loop");
     // simulate random instruction time by picking from instruction_times list
@@ -470,10 +542,8 @@ void stepCommandTest(JWD1797* jwd1797, double instr_times[]) {
     doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
 
     if((jwd1797->master_timer >= 29990 && jwd1797->master_timer <= 30015) ||
-      (jwd1797->master_timer >= 59990 && jwd1797->master_timer <= 60015) ||
-      (jwd1797->master_timer >= 89990 && jwd1797->master_timer <= 90015) ||
-      (jwd1797->master_timer >= 119990 && jwd1797->master_timer <= 120015)) {
-        sleep(1); // delay loop iteration for observation
+      (jwd1797->master_timer >= 119990 && jwd1797->master_timer <= 119995)) {
+        usleep(250000); // delay loop iteration for observation
         seekTestPrintHelper(jwd1797);
     }
   }
@@ -804,27 +874,7 @@ void typeIVerifyPrintHelper(JWD1797* jwd1797) {
   printByteArray(jwd1797->id_field_data, 6);
 }
 
-void getFByteTest(JWD1797* jwd1797, double instr_times[]) {
-  // adjust these for testing different conditions
-  jwd1797->current_track = 2;
-  jwd1797->sso_pin = 1;
 
-  for(int i = 0; i < 200000; i++) {
-    // simulate random instruction time by picking from instruction_times list
-    double instr_t = instr_times[rand()%7];
-    // printf("%f\n", instr_t);
-    doJWD1797Cycle(jwd1797, instr_t); // pass instruction time elapsed to WD1797
-    // only print when a new byte is read
-    if(jwd1797->new_byte_read_signal_) {
-      printf("%s", "Rotational byte pointer: ");
-      printf("%lu\n", jwd1797->rotational_byte_pointer);
-      printf("%s", "MASTER CLOCK: ");
-      printf("%f -- ", jwd1797->master_timer);
-      printf("%02X\n", getFDiskByte(jwd1797));
-      usleep(50000);
-    }
-  }
-}
 
 void readAddressTest(JWD1797* jwd1797, double instr_times[]) {
   printf("\n\n%s\n", "-------------- READ ADDRESS COMMAND TEST --------------");
