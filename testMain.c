@@ -27,29 +27,31 @@ int main(int argc, char* argv[]) {
   //assembleFormattedDiskArray(jwd1797, "Z_DOS_ver1.bin");
   /* tests that the WD1797 is receiving and processing incoming instruction
     timings by using a master clock only for testing */
-  //masterClockTest(jwd1797, instruction_times);
-  //getFByteTest(jwd1797, instruction_times);
+  masterClockTest(jwd1797, instruction_times);
+  getFByteTest(jwd1797, instruction_times);
   // test that the WD1797 is properly recognizing commands
-  //commandWriteTests(jwd1797);
+  commandWriteTests(jwd1797);
   /* tests that the index hole pulse is being properly registered by the status
     register when a TYPE I command is being executed */
-  //indexPulseTest(jwd1797, instruction_times);
+  indexPulseTest(jwd1797, instruction_times);
   // restore command test
-  //restoreCommandTest(jwd1797, instruction_times);
+  restoreCommandTest(jwd1797, instruction_times);
   // SEEK command test
-  //seekCommandTest(jwd1797, instruction_times);
+  seekCommandTest(jwd1797, instruction_times);
   // STEP command test
-  // stepCommandTest(jwd1797, instruction_times);
+  stepCommandTest(jwd1797, instruction_times);
   // STEP-IN command test
   stepInCommandTest(jwd1797, instruction_times);
   // STEP-OUT command test
-  // stepOutCommandTest(jwd1797, instruction_times);
+  stepOutCommandTest(jwd1797, instruction_times);
   // READ SECTOR command test
-  // readSectorTest(jwd1797, instruction_times);
+  readSectorTest(jwd1797, instruction_times);
   // READ ADDRESS command test
-  // readAddressTest(jwd1797, instruction_times);
+  readAddressTest(jwd1797, instruction_times);
   // READ TRACK command test
-  // readTrackTest(jwd1797, instruction_times);
+  readTrackTest(jwd1797, instruction_times);
+
+  printf("\n\n%s\n\n", "*** ALL TESTS ARE COMPLETE! ***");
 
   return 0;
 }
