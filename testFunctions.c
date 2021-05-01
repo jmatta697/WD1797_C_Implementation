@@ -738,12 +738,12 @@ void readAddressTest(JWD1797* jwd1797, double instr_times[]) {
   printf("\n");
   seekTestPrintHelper(jwd1797);
 
-  printf("\n\n%s\n", "-- ISSUE READ ADDRESS COMMAND - TRACK 2 --");
+  printf("\n\n%s\n", "-- ISSUE READ ADDRESS COMMAND - TRACK 4 --");
   printf("\n\n%s\n\n", "press <ENTER> key to continue...");
   while(getchar() != '\n') {};
 
   // now at track 2 - read next address using read address command
-  // isssue read address command at current track
+  // issue read address command at current track
   writeJWD1797(jwd1797, 0xB0, 0b11000100);
   for(int i = 0; i < 200000; i++) {
     // simulate random instruction time by picking from instruction_times list
@@ -791,7 +791,7 @@ void readAddressTest(JWD1797* jwd1797, double instr_times[]) {
   }
   seekTestPrintHelper(jwd1797);
 
-  printf("\n\n%s\n", "-- ISSUE READ ADDRESS COMMAND - TRACK 7 --");
+  printf("\n\n%s\n", "-- ISSUE READ ADDRESS COMMAND - TRACK 13 --");
   printf("\n\n%s\n\n", "press <ENTER> key to continue...");
   while(getchar() != '\n') {};
 
@@ -803,7 +803,7 @@ void readAddressTest(JWD1797* jwd1797, double instr_times[]) {
   }
 
   // now at track 6 - read next address using read address command
-  // isssue read address command at current track
+  // issue read address command at current track
   writeJWD1797(jwd1797, 0xB0, 0b11000110);
   for(int i = 0; i < 200000; i++) {
     // simulate random instruction time by picking from instruction_times list
