@@ -431,6 +431,7 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
   unsigned char target_sector_number;
   unsigned char sso_side;
   int test_byte_pointer;
+  int byte_counter;
 
   printf("\n\n%s\n", "-------------- READ SECTOR COMMAND TEST --------------");
   printf("\n\n%s\n\n", "press <ENTER> key to continue...");
@@ -438,7 +439,7 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
   resetJWD1797(jwd1797);
 
   printf("\n");
-  // isssue restore command
+  // issue restore command
   writeJWD1797(jwd1797, 0xB0, 0b00000000);
   for(int i = 0; i < 100000; i++) {
     // simulate random instruction time by picking from instruction_times list
@@ -486,7 +487,7 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
   // load the desired sector number into the SR
   target_sector_number = 0x07;
   writeJWD1797(jwd1797, 0xB2, target_sector_number);
-  // issue READ SECTOR command - SSO = 1, 15ms delay, multiple record
+  // issue READ SECTOR command - SSO = 1, 30 ms delay, multiple record
   sso_side = 0x01;
   writeJWD1797(jwd1797, 0xB0, 0b10011110);
 
@@ -497,6 +498,8 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
     + (sso_side * (jwd1797->sectors_per_track * jwd1797->sector_length))
     + (jwd1797->sector_length * (target_sector_number - 1));
 
+  byte_counter = 1;
+
   for(int i = 0; i < 300000; i++) {
     // printf("%d\n", i);
     // simulate random instruction time by picking from instruction_times list
@@ -506,10 +509,11 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
     if(jwd1797->new_byte_read_signal_ && jwd1797->id_field_data[2] >= 7 &&
       ((jwd1797->statusRegister)&1)) {
       // readSectorPrintHelper(jwd1797);
-      usleep(50000); // delay loop iteration for observation
+      usleep(2500); // delay loop iteration for observation
     }
     // is there a drq request? check status bit 1..
     if(((readJWD1797(jwd1797, 0xB0) >> 1) & 1) == 1) {
+      usleep(50000);
       // printf("%s%f\n", "MASTER CLOCK: ", jwd1797->master_timer);
       // read the data register to get the byte read from disk
       unsigned char r_byte = (unsigned char)(readJWD1797(jwd1797, 0xB3));
@@ -517,7 +521,8 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
 
       unsigned char r_test_byte = payload_test_data[test_byte_pointer];
 
-      printf("%s%02X | %s%02X ", "Byte read: ", r_byte, "Test Byte: ", r_test_byte);
+      printf("%3d - %s%02X | %s%02X ", byte_counter, "Byte read: ", r_byte,
+        "Test Byte: ", r_test_byte);
       // usleep(500000); // delay loop iteration for observation
       // compare read byte to payload data byte from disk image
       if(r_byte == r_test_byte) {
@@ -527,17 +532,22 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
         printf("%s\n", " -- WRONG BYTE");
       }
       test_byte_pointer++;
+      byte_counter = (byte_counter % jwd1797->sector_length) + 1;
     }
 
     // insert forced interrupt (0xD8) terminate command with INTRQ @ inst 150,000
-    if(i == 27000) {
+    if(i == 133000) {
       writeJWD1797(jwd1797, 0xB0, 0xD8);
-      break;
+    }
+    if(i == 133001) {
+      printf("%s", "TYPE II STATUS: " );
+      print_bin8_representation(readJWD1797(jwd1797, 0xB0));
+      printf("\n\n");
     }
   }
-  printf("%s", "Verify Index count: ");
+  printf("\n%s", "Verify Index count: ");
   printf("%d\n", jwd1797->verify_index_count);
-  printf("\n\n");
+  printf("\n");
   // printByteArray(memory, 512*4);
   printf("%s", "TYPE II STATUS: " );
   print_bin8_representation(readJWD1797(jwd1797, 0xB0));
@@ -565,14 +575,16 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
   sso_side = 0x01;
   writeJWD1797(jwd1797, 0xB0, 0b10011110);
 
-  printf("\n\n%s\n\n", "searching for sector... PLEASE WAIT...");
-
   // printf("%s%d\n", "num_sec/track * sec_length", jwd1797->sectors_per_track * jwd1797->sector_length);
   // get index for test byte array based on track and SSO bin
   test_byte_pointer = (target_cyl
     * (jwd1797->sectors_per_track * 2 * jwd1797->sector_length))
     + (sso_side * (jwd1797->sectors_per_track * jwd1797->sector_length))
     + (jwd1797->sector_length * (target_sector_number - 1));
+
+  printf("\n\n%s\n\n", "searching for sector... PLEASE WAIT...");
+
+  byte_counter = 1;
 
   for(int i = 0; i < 300000; i++) {
     // printf("%d\n", i);
@@ -595,7 +607,8 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
 
       unsigned char r_test_byte = payload_test_data[test_byte_pointer];
 
-      printf("%s%02X | %s%02X ", "Byte read: ", r_byte, "Test Byte: ", r_test_byte);
+      printf("%3d - %s%02X | %s%02X ", byte_counter, "Byte read: ", r_byte,
+        "Test Byte: ", r_test_byte);
       // usleep(500000); // delay loop iteration for observation
       // compare read byte to payload data byte from disk image
       if(r_byte == r_test_byte) {
@@ -605,6 +618,7 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
         printf("%s\n", " -- WRONG BYTE");
       }
       test_byte_pointer++;
+      byte_counter = (byte_counter % jwd1797->sector_length) + 1;
     }
 
     // insert forced interrupt (0xD8) terminate command with INTRQ @ inst 150,000
@@ -612,9 +626,9 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
       // writeJWD1797(jwd1797, 0xB0, 0xD8);
     }
   }
-  printf("%s", "Verify Index count: ");
+  printf("\n%s", "Verify Index count: ");
   printf("%d\n", jwd1797->verify_index_count);
-  printf("\n\n");
+  printf("\n");
   // printByteArray(memory, 512*4);
   printf("%s", "TYPE II STATUS: " );
   print_bin8_representation(readJWD1797(jwd1797, 0xB0));
@@ -645,6 +659,8 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
     + (sso_side * (jwd1797->sectors_per_track * jwd1797->sector_length))
     + (jwd1797->sector_length * (target_sector_number - 1));
 
+  byte_counter = 1;
+
   for(int i = 0; i < 300000; i++) {
     // printf("%d\n", i);
     // simulate random instruction time by picking from instruction_times list
@@ -666,7 +682,8 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
 
       unsigned char r_test_byte = payload_test_data[test_byte_pointer];
 
-      printf("%s%02X | %s%02X ", "Byte read: ", r_byte, "Test Byte: ", r_test_byte);
+      printf("%3d - %s%02X | %s%02X ", byte_counter, "Byte read: ", r_byte,
+        "Test Byte: ", r_test_byte);
       // usleep(500000); // delay loop iteration for observation
       // compare read byte to payload data byte from disk image
       if(r_byte == r_test_byte) {
@@ -676,6 +693,7 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
         printf("%s\n", " -- WRONG BYTE");
       }
       test_byte_pointer++;
+      byte_counter = (byte_counter % jwd1797->sector_length) + 1;
     }
 
     // insert forced interrupt (0xD8) terminate command with INTRQ @ inst 150,000
@@ -683,9 +701,9 @@ void readSectorTest(JWD1797* jwd1797, double instr_times[]) {
       // writeJWD1797(jwd1797, 0xB0, 0xD8);
     }
   }
-  printf("%s", "Verify Index count: ");
+  printf("\n%s", "Verify Index count: ");
   printf("%d\n", jwd1797->verify_index_count);
-  printf("\n\n");
+  printf("\n");
   // printByteArray(memory, 512*4);
   printf("%s", "TYPE II STATUS: " );
   print_bin8_representation(readJWD1797(jwd1797, 0xB0));
