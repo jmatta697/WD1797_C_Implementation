@@ -47,11 +47,13 @@ int main(int argc, char* argv[]) {
   // READ SECTOR command test
   // readSectorTest(jwd1797, instruction_times);
   // READ ADDRESS command test
-  readAddressTest(jwd1797, instruction_times);
+  // readAddressTest(jwd1797, instruction_times);
   // READ TRACK command test
   readTrackTest(jwd1797, instruction_times);
 
-  printf("\n\n%s\n\n", "*** ALL TESTS ARE COMPLETE! ***");
+  printf("\n\n\t%s\n", "*******************************");
+  printf("\t%s\n", "*** ALL TESTS ARE COMPLETE! ***");
+  printf("\t%s\n\n\n", "*******************************");
 
   return 0;
 }

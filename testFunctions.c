@@ -834,6 +834,8 @@ void readAddressTest(JWD1797* jwd1797, double instr_times[]) {
 }
 
 void readTrackTest(JWD1797* jwd1797, double instr_times[]) {
+  unsigned int byte_counter;
+
   printf("\n\n%s\n", "-------------- READ TRACK COMMAND TEST --------------");
   printf("\n\n%s\n\n", "press <ENTER> key to continue...");
   while(getchar() != '\n') {};
@@ -870,6 +872,7 @@ void readTrackTest(JWD1797* jwd1797, double instr_times[]) {
   int formatted_test_array_pt = ((jwd1797->actual_num_track_bytes * 2) * target_tr)
     + (jwd1797->actual_num_track_bytes * sso_side);
 
+  byte_counter = 1;
   for(int i = 0; i < 5000000; i++) {
     // simulate random instruction time by picking from instruction_times list
     double instr_t = instr_times[rand()%7];
@@ -883,9 +886,11 @@ void readTrackTest(JWD1797* jwd1797, double instr_times[]) {
       // read the data register to get the byte read from disk
       unsigned char r_byte = (unsigned char)(readJWD1797(jwd1797, 0xB3));
       unsigned char r_test_byte =
-      jwd1797->formattedDiskArray[formatted_test_array_pt];
-      printf("%ld ", jwd1797->rotational_byte_pointer);
-      printf("%s%02X | %s%02X ", "Byte read: ", r_byte, "Test Byte: ", r_test_byte);
+        jwd1797->formattedDiskArray[formatted_test_array_pt];
+
+      printf("%4ld ", jwd1797->rotational_byte_pointer);
+      printf("| %4d - %s%02X | %s%02X ", byte_counter, "Byte read: ", r_byte,
+        "Test Byte: ", r_test_byte);
       // usleep(500000); // delay loop iteration for observation
       // compare read byte to payload data byte from disk image
       if(r_byte == r_test_byte) {
@@ -897,6 +902,7 @@ void readTrackTest(JWD1797* jwd1797, double instr_times[]) {
         break;
       }
       formatted_test_array_pt++;
+      byte_counter = (byte_counter % jwd1797->actual_num_track_bytes) + 1;
     }
   }
   printf("\n");
@@ -939,6 +945,7 @@ void readTrackTest(JWD1797* jwd1797, double instr_times[]) {
   formatted_test_array_pt = ((jwd1797->actual_num_track_bytes * 2) * target_tr)
     + (jwd1797->actual_num_track_bytes * sso_side);
 
+  byte_counter = 1;
   for(int i = 0; i < 5000000; i++) {
     // simulate random instruction time by picking from instruction_times list
     double instr_t = instr_times[rand()%7];
@@ -952,9 +959,10 @@ void readTrackTest(JWD1797* jwd1797, double instr_times[]) {
       // read the data register to get the byte read from disk
       unsigned char r_byte = (unsigned char)(readJWD1797(jwd1797, 0xB3));
       unsigned char r_test_byte =
-      jwd1797->formattedDiskArray[formatted_test_array_pt];
-      printf("%ld ", jwd1797->rotational_byte_pointer);
-      printf("%s%02X | %s%02X ", "Byte read: ", r_byte, "Test Byte: ", r_test_byte);
+        jwd1797->formattedDiskArray[formatted_test_array_pt];
+      printf("%4ld ", jwd1797->rotational_byte_pointer);
+      printf("| %4d - %s%02X | %s%02X ", byte_counter, "Byte read: ", r_byte,
+        "Test Byte: ", r_test_byte);
       // usleep(500000); // delay loop iteration for observation
       // compare read byte to payload data byte from disk image
       if(r_byte == r_test_byte) {
@@ -966,6 +974,7 @@ void readTrackTest(JWD1797* jwd1797, double instr_times[]) {
         break;
       }
       formatted_test_array_pt++;
+      byte_counter = (byte_counter % jwd1797->actual_num_track_bytes) + 1;
     }
   }
   printf("\n");
